@@ -203,7 +203,11 @@ export async function executeToolCall(toolCall, { cwd, onOutput, runSubagent } =
         if (!fs.existsSync(fullPath)) {
           return { error: `Dosya bulunamadı: ${args.filePath}` };
         }
-        const content = fs.readFileSync(fullPath, "utf8");
+        let content = fs.readFileSync(fullPath, "utf8");
+        if (content.length > 50000) {
+          const originalLen = content.length;
+          content = content.slice(0, 50000) + `\n\n... [⚠️ Dosya çok büyük olduğu için ilk 50.000 karakter okundu. Toplam: ${originalLen.toLocaleString()} karakter]`;
+        }
         return { filePath: args.filePath, content };
       } catch (err) {
         return { error: `Dosya okuma hatası: ${err.message}` };
@@ -233,10 +237,15 @@ export async function executeToolCall(toolCall, { cwd, onOutput, runSubagent } =
           return { error: `Dizin bulunamadı: ${targetDir}` };
         }
         const entries = fs.readdirSync(targetDir, { withFileTypes: true });
-        const list = entries.map(e => ({
+        let list = entries.map(e => ({
           name: e.name,
           type: e.isDirectory() ? "directory" : "file"
         }));
+        if (list.length > 250) {
+          const total = list.length;
+          list = list.slice(0, 250);
+          return { directory: targetDir, entries: list, note: `Dizinde toplam ${total} öğe var, ilk 250 tanesi listelendi.` };
+        }
         return { directory: targetDir, entries: list };
       } catch (err) {
         return { error: `Dizin listeleme hatası: ${err.message}` };

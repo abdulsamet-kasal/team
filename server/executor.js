@@ -16,6 +16,15 @@ export function killAllActiveCommands() {
   return count;
 }
 
+export function truncateOutput(str, maxChars = 30000) {
+  if (!str || typeof str !== "string" || str.length <= maxChars) return str || "";
+  const half = Math.floor(maxChars / 2);
+  const head = str.slice(0, half);
+  const tail = str.slice(-half);
+  const truncatedCount = str.length - maxChars;
+  return `${head}\n\n... [⚠️ ÇIKTI ÇOK UZUN OLDUĞU İÇİN ORTA KISIM KIRPILDI (${truncatedCount.toLocaleString()} karakter) ...] \n\n${tail}`;
+}
+
 export function executeCommand(command, { cwd, onOutput, timeoutMs = 120000 } = {}) {
   return new Promise((resolve) => {
     const startTime = Date.now();
@@ -70,14 +79,18 @@ export function executeCommand(command, { cwd, onOutput, timeoutMs = 120000 } = 
 
     child.stdout.on("data", (data) => {
       const text = data.toString("utf8");
-      stdout += text;
-      if (onOutput) onOutput({ type: "stdout", chunk: text });
+      if (stdout.length < 100000) {
+        stdout += text;
+      }
+      if (onOutput) onOutput({ type: "stdout", chunk: text.length > 5000 ? text.slice(0, 5000) + "..." : text });
     });
 
     child.stderr.on("data", (data) => {
       const text = data.toString("utf8");
-      stderr += text;
-      if (onOutput) onOutput({ type: "stderr", chunk: text });
+      if (stderr.length < 100000) {
+        stderr += text;
+      }
+      if (onOutput) onOutput({ type: "stderr", chunk: text.length > 5000 ? text.slice(0, 5000) + "..." : text });
     });
 
     child.on("error", (err) => {
@@ -90,8 +103,8 @@ export function executeCommand(command, { cwd, onOutput, timeoutMs = 120000 } = 
         if (onOutput) onOutput({ type: "stderr", chunk: msg });
         resolve({
           exitCode: 1,
-          stdout,
-          stderr,
+          stdout: truncateOutput(stdout),
+          stderr: truncateOutput(stderr),
           durationMs: Date.now() - startTime
         });
       }
@@ -104,8 +117,8 @@ export function executeCommand(command, { cwd, onOutput, timeoutMs = 120000 } = 
         isSettled = true;
         resolve({
           exitCode: code ?? 0,
-          stdout,
-          stderr,
+          stdout: truncateOutput(stdout),
+          stderr: truncateOutput(stderr),
           durationMs: Date.now() - startTime
         });
       }
