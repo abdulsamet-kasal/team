@@ -25,7 +25,11 @@ const clients = new Set();
 
 wss.on("connection", (ws) => {
   clients.add(ws);
-  ws.send(JSON.stringify({ type: "init", status: "connected" }));
+  ws.send(JSON.stringify({ 
+    type: "init", 
+    status: "connected",
+    activeTasks: store.getAllActiveTasks() 
+  }));
 
   ws.on("close", () => {
     clients.delete(ws);
@@ -51,6 +55,11 @@ app.get("/api/settings", (req, res) => {
 app.post("/api/settings", (req, res) => {
   const updated = store.updateSettings(req.body);
   res.json(updated);
+});
+
+// Active Tasks
+app.get("/api/tasks/active", (req, res) => {
+  res.json(store.getAllActiveTasks());
 });
 
 // 2. Bots
@@ -237,13 +246,43 @@ app.post("/api/chat", async (req, res) => {
     const respondingBot = botQueue.shift();
     rounds++;
 
+    // 1. Canlı Bot Mesajını ANINDA oluştur ve veritabanına kaydet (Sayfa yenilense bile görünür!)
+    const botMsg = store.addMessage(targetId, {
+      role: "assistant",
+      botId: respondingBot.id,
+      botName: respondingBot.name,
+      botAvatar: respondingBot.avatar,
+      botColor: respondingBot.color,
+      content: "",
+      isLive: true,
+      currentStatus: "İşlem planlanıyor ve başlatılıyor...",
+      toolEvents: []
+    });
+    broadcast({ type: "new_message", targetId, message: botMsg });
+
+    const currentTaskInfo = {
+      botId: respondingBot.id,
+      botName: respondingBot.name,
+      botAvatar: respondingBot.avatar,
+      botColor: respondingBot.color,
+      currentStatus: "Düşünüyor ve planlıyor...",
+      cwd: store.getSettings().defaultCwd,
+      rounds,
+      maxRounds,
+      goalMode,
+      startedAt: new Date().toISOString()
+    };
+    store.setActiveTask(targetId, currentTaskInfo);
+    broadcast({ type: "active_task_updated", targetId, task: currentTaskInfo });
     broadcast({ type: "bot_status", botId: respondingBot.id, status: "thinking", targetId, rounds, goalMode });
 
     try {
       const history = store.getMessages(targetId).map(m => ({
         role: m.role,
         content: m.content,
-        images: m.images
+        images: m.images,
+        botId: m.botId,
+        botName: m.botName
       }));
 
       // Goal modunda botlara durmama talimatını hatırlat
@@ -260,7 +299,64 @@ app.post("/api/chat", async (req, res) => {
         cwd: store.getSettings().defaultCwd,
         abortSignal: controller.signal,
         onToolEvent: (event) => {
-          accumulatedToolEvents.push(event);
+          if (event.type === "tool_start") {
+            let cmdInfo = "";
+            try {
+              const parsed = JSON.parse(event.args || "{}");
+              cmdInfo = parsed.command || parsed.filePath || parsed.repoName || parsed.task || "";
+            } catch (e) {}
+            const statusText = event.toolName === "execute_bash"
+              ? `Terminal Komutu: ${cmdInfo}`
+              : `Araç: ${event.toolName} ${cmdInfo ? `(${cmdInfo})` : ""}`;
+
+            accumulatedToolEvents.push(event);
+            store.updateMessage(targetId, botMsg.id, {
+              toolEvents: [...accumulatedToolEvents],
+              currentStatus: statusText
+            });
+            const updatedTask = {
+              ...currentTaskInfo,
+              currentStatus: statusText,
+              activeTool: event.toolName,
+              activeCmd: cmdInfo
+            };
+            store.setActiveTask(targetId, updatedTask);
+            broadcast({
+              type: "message_updated",
+              targetId,
+              message: {
+                id: botMsg.id,
+                toolEvents: accumulatedToolEvents,
+                currentStatus: statusText
+              }
+            });
+            broadcast({
+              type: "active_task_updated",
+              targetId,
+              task: updatedTask
+            });
+          } else if (event.type === "tool_finish") {
+            const idx = accumulatedToolEvents.findIndex(e => e.toolCallId === event.toolCallId);
+            if (idx >= 0) {
+              accumulatedToolEvents[idx] = { ...accumulatedToolEvents[idx], ...event };
+            } else {
+              accumulatedToolEvents.push(event);
+            }
+            store.updateMessage(targetId, botMsg.id, {
+              toolEvents: [...accumulatedToolEvents],
+              currentStatus: `Tamamlandı: ${event.toolName}`
+            });
+            broadcast({
+              type: "message_updated",
+              targetId,
+              message: {
+                id: botMsg.id,
+                toolEvents: accumulatedToolEvents,
+                currentStatus: `Tamamlandı: ${event.toolName}`
+              }
+            });
+          }
+
           broadcast({
             type: "tool_event",
             targetId,
@@ -272,6 +368,11 @@ app.post("/api/chat", async (req, res) => {
       });
 
       if (controller.signal.aborted) {
+        store.updateMessage(targetId, botMsg.id, {
+          content: "🛑 İşlem acilen durduruldu.",
+          isLive: false,
+          currentStatus: null
+        });
         break;
       }
 
@@ -280,18 +381,26 @@ app.post("/api/chat", async (req, res) => {
         isGoalCompleted = true;
       }
 
-      const botMsg = store.addMessage(targetId, {
-        role: "assistant",
-        botId: respondingBot.id,
-        botName: respondingBot.name,
-        botAvatar: respondingBot.avatar,
-        botColor: respondingBot.color,
+      store.updateMessage(targetId, botMsg.id, {
         content: reply,
         toolEvents: accumulatedToolEvents,
+        isLive: false,
+        currentStatus: null,
         isGoalCompleted
       });
 
-      broadcast({ type: "new_message", targetId, message: botMsg });
+      broadcast({
+        type: "message_updated",
+        targetId,
+        message: {
+          id: botMsg.id,
+          content: reply,
+          toolEvents: accumulatedToolEvents,
+          isLive: false,
+          currentStatus: null,
+          isGoalCompleted
+        }
+      });
 
       // Otonom Takım İletişimi: Bot yanıtında başka bir ekip arkadaşını etiketlediyse zincire ekle
       if (isRoom && rounds < maxRounds && !isGoalCompleted) {
@@ -319,16 +428,24 @@ app.post("/api/chat", async (req, res) => {
     } catch (err) {
       if (controller.signal.aborted) break;
       console.error("Chat turn error:", err);
-      const errorMsg = store.addMessage(targetId, {
-        role: "assistant",
-        botId: respondingBot.id,
-        botName: respondingBot.name,
-        botAvatar: respondingBot.avatar,
-        botColor: respondingBot.color,
-        content: `⚠️ Bir hata oluştu: ${err.message}`
+      store.updateMessage(targetId, botMsg.id, {
+        content: `⚠️ Bir hata oluştu: ${err.message}`,
+        isLive: false,
+        currentStatus: null
       });
-      broadcast({ type: "new_message", targetId, message: errorMsg });
+      broadcast({
+        type: "message_updated",
+        targetId,
+        message: {
+          id: botMsg.id,
+          content: `⚠️ Bir hata oluştu: ${err.message}`,
+          isLive: false,
+          currentStatus: null
+        }
+      });
     } finally {
+      store.setActiveTask(targetId, null);
+      broadcast({ type: "active_task_updated", targetId, task: null });
       broadcast({ type: "bot_status", botId: respondingBot.id, status: "idle", targetId });
     }
   }
