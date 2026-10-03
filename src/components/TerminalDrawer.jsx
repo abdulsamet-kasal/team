@@ -1,13 +1,73 @@
-import React, { useState, useRef, useEffect } from "react";
-import { X, Terminal, Play, Trash2, ArrowUpRight } from "lucide-react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
+import { X, Terminal, Play, Trash2, ArrowUpRight, GripVertical } from "lucide-react";
 
-export default function TerminalDrawer({ isOpen, onClose, terminalLogs = [], onRunCommand, isRunning = false }) {
+export default function TerminalDrawer({ 
+  isOpen, 
+  onClose, 
+  terminalLogs = [], 
+  onRunCommand, 
+  onClearLogs,
+  isRunning = false 
+}) {
   const [inputCmd, setInputCmd] = useState("");
+  const [width, setWidth] = useState(() => {
+    if (typeof window !== "undefined") {
+      return Math.min(Math.max(window.innerWidth * 0.38, 450), 750);
+    }
+    return 500;
+  });
+  const [isDragging, setIsDragging] = useState(false);
+
   const logsEndRef = useRef(null);
+  const dragRef = useRef({ startX: 0, startWidth: 500 });
 
   useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [terminalLogs]);
+    if (isOpen) {
+      logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [terminalLogs, isOpen]);
+
+  // Resize handler
+  const handleMouseDown = useCallback((e) => {
+    e.preventDefault();
+    setIsDragging(true);
+    dragRef.current = {
+      startX: e.clientX,
+      startWidth: width
+    };
+  }, [width]);
+
+  useEffect(() => {
+    const handleMouseMove = (e) => {
+      if (!isDragging) return;
+      const delta = dragRef.current.startX - e.clientX;
+      const newWidth = Math.max(340, Math.min(window.innerWidth - 360, dragRef.current.startWidth + delta));
+      setWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      if (isDragging) {
+        setIsDragging(false);
+      }
+    };
+
+    if (isDragging) {
+      window.addEventListener("mousemove", handleMouseMove);
+      window.addEventListener("mouseup", handleMouseUp);
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "col-resize";
+    } else {
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    }
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+  }, [isDragging]);
 
   if (!isOpen) return null;
 
@@ -19,44 +79,88 @@ export default function TerminalDrawer({ isOpen, onClose, terminalLogs = [], onR
   };
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 h-80 bg-zinc-950/95 border-t border-zinc-800 backdrop-blur-lg flex flex-col shadow-2xl">
-      {/* Drawer Header */}
-      <div className="h-10 px-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/60 select-none">
-        <div className="flex items-center gap-2 text-xs font-mono text-zinc-300">
-          <Terminal className="w-4 h-4 text-emerald-400" />
-          <span className="font-semibold text-zinc-100">Canlı Sistem Terminali</span>
-          <span className="text-[10px] text-zinc-400 font-normal">~/Projeler/team</span>
+    <div 
+      style={{ width: `${width}px` }}
+      className="fixed top-0 right-0 bottom-0 z-40 bg-zinc-950/98 border-l border-zinc-800 backdrop-blur-xl flex flex-col shadow-2xl transition-all duration-75 select-none"
+    >
+      {/* Draggable Resize Handle on the Left Edge */}
+      <div
+        onMouseDown={handleMouseDown}
+        title="Yeniden Boyutlandırmak İçin Sürükleyin"
+        className={`absolute left-0 top-0 bottom-0 w-2.5 -translate-x-1.5 cursor-col-resize flex items-center justify-center group z-50 transition-colors ${
+          isDragging ? "bg-indigo-500/70" : "hover:bg-indigo-500/40"
+        }`}
+      >
+        <div className={`w-1 h-8 rounded-full ${isDragging ? "bg-indigo-400" : "bg-zinc-600 group-hover:bg-indigo-400"} transition-colors`} />
+      </div>
+
+      {/* Terminal Header */}
+      <div className="h-14 px-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/70 select-none shrink-0">
+        <div className="flex items-center gap-2.5 text-xs font-mono text-zinc-300 min-w-0">
+          <div className="w-7 h-7 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
+            <Terminal className="w-3.5 h-3.5" />
+          </div>
+          <div className="truncate">
+            <div className="font-semibold text-zinc-100 flex items-center gap-2">
+              Canlı Sistem Terminali
+              <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                Bash
+              </span>
+            </div>
+            <div className="text-[10px] text-zinc-400 font-normal truncate">
+              ~/Projeler/team
+            </div>
+          </div>
         </div>
 
         <div className="flex items-center gap-1.5">
+          {onClearLogs && (
+            <button
+              onClick={onClearLogs}
+              title="Terminal Çıktılarını Temizle"
+              className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
           <button
             onClick={onClose}
-            className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+            title="Terminali Gizle (Ctrl+`)"
+            className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
       </div>
 
-      {/* Terminal Output Area */}
-      <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-1.5 select-text bg-black/40">
+      {/* Terminal Output Logs */}
+      <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-1.5 select-text bg-black/50">
         {terminalLogs.length === 0 ? (
-          <div className="text-zinc-600 text-xs italic">
-            Terminal hazır. Botlar komut çalıştırdığında veya aşağıdan komut girdiğinizde çıktılar burada canlı akar.
+          <div className="h-full flex flex-col items-center justify-center text-zinc-600 text-xs italic space-y-1">
+            <Terminal className="w-8 h-8 text-zinc-700 mb-1" />
+            <p>Terminal dinlemede...</p>
+            <p className="text-[11px] text-zinc-500 text-center max-w-xs">
+              Botların yürüttüğü bash komutları veya alttan girdiğiniz komutlar burada anlık akar.
+            </p>
           </div>
         ) : (
           terminalLogs.map((log, idx) => (
             <div key={idx} className="leading-relaxed">
               {log.type === "command" && (
-                <div className="text-emerald-400 font-semibold flex items-center gap-1.5 mt-2">
-                  <span>$</span> {log.text}
+                <div className="text-emerald-400 font-semibold flex items-start gap-1.5 mt-2.5 pt-1.5 border-t border-zinc-800/60">
+                  <span className="text-zinc-500 select-none">$</span>
+                  <span className="break-all">{log.text}</span>
                 </div>
               )}
               {log.type === "stdout" && (
-                <div className="text-zinc-300 whitespace-pre-wrap">{log.text}</div>
+                <div className="text-zinc-300 whitespace-pre-wrap break-all pl-3 border-l border-zinc-800/80">
+                  {log.text}
+                </div>
               )}
               {log.type === "stderr" && (
-                <div className="text-rose-400 whitespace-pre-wrap">{log.text}</div>
+                <div className="text-rose-400 whitespace-pre-wrap break-all pl-3 border-l border-rose-500/40">
+                  {log.text}
+                </div>
               )}
             </div>
           ))
@@ -65,13 +169,13 @@ export default function TerminalDrawer({ isOpen, onClose, terminalLogs = [], onR
       </div>
 
       {/* Terminal Input Bar */}
-      <form onSubmit={handleSubmit} className="p-2.5 border-t border-zinc-800 bg-zinc-900/80 flex items-center gap-2">
-        <span className="text-emerald-400 font-mono text-sm pl-2">$</span>
+      <form onSubmit={handleSubmit} className="p-2.5 border-t border-zinc-800 bg-zinc-900/90 flex items-center gap-2 shrink-0">
+        <span className="text-emerald-400 font-mono text-sm pl-2 select-none">$</span>
         <input
           type="text"
           value={inputCmd}
-          onChange={e => setInputCmd(e.target.value)}
-          placeholder="Komut çalıştır (örn: ls -la, git status, gh repo list, npm test)..."
+          onChange={(e) => setInputCmd(e.target.value)}
+          placeholder="Terminal komutu girin (örn: git status, gh repo list)..."
           className="flex-1 bg-transparent text-xs font-mono text-zinc-100 placeholder-zinc-500 focus:outline-none"
         />
         <button
@@ -79,7 +183,7 @@ export default function TerminalDrawer({ isOpen, onClose, terminalLogs = [], onR
           disabled={!inputCmd.trim() || isRunning}
           className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors ${
             inputCmd.trim() && !isRunning
-              ? "bg-emerald-600 hover:bg-emerald-500 text-white"
+              ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/20"
               : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
           }`}
         >

@@ -6,8 +6,10 @@ import cors from "cors";
 import { WebSocketServer, WebSocket } from "ws";
 import { store } from "./store.js";
 import { runAgentTurn } from "./agent.js";
-import { executeCommand } from "./executor.js";
+import { executeCommand, killAllActiveCommands } from "./executor.js";
 import { memoryManager } from "./memory.js";
+
+const activeControllers = new Map();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -133,18 +135,65 @@ app.delete("/api/messages/:targetId", (req, res) => {
   res.json({ success: true });
 });
 
-// 6. Chat & Autonomous Multi-Bot Execution Trigger
+// 6. Emergency Stop API
+app.post("/api/stop", (req, res) => {
+  const { targetId } = req.body;
+  const killedCount = killAllActiveCommands();
+
+  if (targetId && activeControllers.has(targetId)) {
+    const controller = activeControllers.get(targetId);
+    controller.abort();
+    activeControllers.delete(targetId);
+  } else {
+    for (const [id, controller] of activeControllers.entries()) {
+      controller.abort();
+    }
+    activeControllers.clear();
+  }
+
+  const stopMsg = store.addMessage(targetId || "room-all", {
+    role: "assistant",
+    botName: "Sistem",
+    botAvatar: "🛑",
+    botColor: "red",
+    content: "🛑 **ACİL DURDURMA TETİKLENDİ:** Kullanıcı isteğiyle tüm bot işlemleri ve çalışan terminal komutları derhal durduruldu."
+  });
+  broadcast({ type: "new_message", targetId: targetId || "room-all", message: stopMsg });
+
+  const allBots = store.getBots();
+  for (const b of allBots) {
+    broadcast({ type: "bot_status", botId: b.id, status: "idle", targetId });
+  }
+
+  broadcast({
+    type: "emergency_stop",
+    targetId,
+    killedProcesses: killedCount
+  });
+
+  res.json({ success: true, killedProcesses: killedCount });
+});
+
+// 7. Chat & Autonomous Multi-Bot Execution Trigger (with Goal Mode)
 app.post("/api/chat", async (req, res) => {
-  const { targetId, content, images } = req.body;
+  const { targetId, content, images, goalMode = false } = req.body;
   if (!targetId || (!content && (!images || !images.length))) {
     return res.status(400).json({ error: "targetId ve en az bir mesaj veya görsel gereklidir." });
   }
+
+  // Varsa önceki devam eden görevi sonlandır
+  if (activeControllers.has(targetId)) {
+    activeControllers.get(targetId).abort();
+  }
+  const controller = new AbortController();
+  activeControllers.set(targetId, controller);
 
   // 1. Kullanıcı mesajını kaydet ve yayınla
   const userMsg = store.addMessage(targetId, {
     role: "user",
     content: content || "",
-    images: images || []
+    images: images || [],
+    goalMode: !!goalMode
   });
   broadcast({ type: "new_message", targetId, message: userMsg });
 
@@ -179,17 +228,16 @@ app.post("/api/chat", async (req, res) => {
     botQueue.push(bot);
   }
 
-  // Otonom Çoklu Bot Döngüsü (En fazla 6 adım zincir)
+  // Otonom Çoklu Bot Döngüsü: Goal Modunda 25 adıma kadar bitene kadar devam eder!
   let rounds = 0;
-  const maxRounds = isRoom ? 6 : 1;
-  const executedInChain = new Set();
+  const maxRounds = goalMode ? 25 : (isRoom ? 6 : 1);
+  let isGoalCompleted = false;
 
-  while (botQueue.length > 0 && rounds < maxRounds) {
+  while (botQueue.length > 0 && rounds < maxRounds && !controller.signal.aborted && !isGoalCompleted) {
     const respondingBot = botQueue.shift();
     rounds++;
-    executedInChain.add(respondingBot.id);
 
-    broadcast({ type: "bot_status", botId: respondingBot.id, status: "thinking", targetId });
+    broadcast({ type: "bot_status", botId: respondingBot.id, status: "thinking", targetId, rounds, goalMode });
 
     try {
       const history = store.getMessages(targetId).map(m => ({
@@ -198,10 +246,19 @@ app.post("/api/chat", async (req, res) => {
         images: m.images
       }));
 
+      // Goal modunda botlara durmama talimatını hatırlat
+      if (goalMode) {
+        history.push({
+          role: "system",
+          content: `🎯 [GOAL MODU DEVREDE - Tur ${rounds}/${maxRounds}]: Kullanıcının hedefi tam ve çalışır olarak bitene kadar durmayın. Kodları yazın, terminalde çalıştırın, test edin. Hata varsa düzeltin. Görev ve testler tamamen bittiğinde 'complete_goal' aracını çağırın.`
+        });
+      }
+
       let accumulatedToolEvents = [];
 
-      const reply = await runAgentTurn(respondingBot.id, history, {
+      const result = await runAgentTurn(respondingBot.id, history, {
         cwd: store.getSettings().defaultCwd,
+        abortSignal: controller.signal,
         onToolEvent: (event) => {
           accumulatedToolEvents.push(event);
           broadcast({
@@ -214,6 +271,15 @@ app.post("/api/chat", async (req, res) => {
         }
       });
 
+      if (controller.signal.aborted) {
+        break;
+      }
+
+      const reply = result.reply || "";
+      if (result.isGoalCompleted) {
+        isGoalCompleted = true;
+      }
+
       const botMsg = store.addMessage(targetId, {
         role: "assistant",
         botId: respondingBot.id,
@@ -221,13 +287,14 @@ app.post("/api/chat", async (req, res) => {
         botAvatar: respondingBot.avatar,
         botColor: respondingBot.color,
         content: reply,
-        toolEvents: accumulatedToolEvents
+        toolEvents: accumulatedToolEvents,
+        isGoalCompleted
       });
 
       broadcast({ type: "new_message", targetId, message: botMsg });
 
       // Otonom Takım İletişimi: Bot yanıtında başka bir ekip arkadaşını etiketlediyse zincire ekle
-      if (isRoom && rounds < maxRounds) {
+      if (isRoom && rounds < maxRounds && !isGoalCompleted) {
         const lowerReply = reply.toLowerCase();
         for (const candidate of allBots) {
           if (
@@ -236,12 +303,21 @@ app.post("/api/chat", async (req, res) => {
             !botQueue.some(b => b.id === candidate.id) &&
             (lowerReply.includes(`@${candidate.name.toLowerCase()}`) || lowerReply.includes(`@${candidate.role.toLowerCase()}`))
           ) {
-            // İlgili botu sıradaki konuşmacı olarak ekle
             botQueue.push(candidate);
           }
         }
+
+        // Goal Modu Garantisi: Eğer botQueue bittiyse ve hedef henüz complete_goal ile sonuçlanmadıysa,
+        // Tech Lead veya QA'yı tekrar devreye sokarak görevi denetlemesini ve bitirmesini sağla!
+        if (botQueue.length === 0 && goalMode && !isGoalCompleted && rounds < maxRounds) {
+          const supervisor = (rounds % 2 === 0) 
+            ? (allBots.find(b => b.id === "bot-qa") || allBots[0])
+            : (allBots.find(b => b.isChief || b.id === "bot-lead") || allBots[0]);
+          botQueue.push(supervisor);
+        }
       }
     } catch (err) {
+      if (controller.signal.aborted) break;
       console.error("Chat turn error:", err);
       const errorMsg = store.addMessage(targetId, {
         role: "assistant",
@@ -256,6 +332,20 @@ app.post("/api/chat", async (req, res) => {
       broadcast({ type: "bot_status", botId: respondingBot.id, status: "idle", targetId });
     }
   }
+
+  // Görev tamamlandı veya durduruldu temizliği
+  if (isGoalCompleted) {
+    const completeAnnouncement = store.addMessage(targetId, {
+      role: "assistant",
+      botName: "Team Orchestrator",
+      botAvatar: "🎯",
+      botColor: "green",
+      content: "🎉 **HEDEF BAŞARIYLA TAMAMLANDI!** Ekip istenen tüm geliştirmeleri, testleri ve doğrulamaları tamamladı."
+    });
+    broadcast({ type: "new_message", targetId, message: completeAnnouncement });
+  }
+
+  activeControllers.delete(targetId);
 });
 
 // 6. Direct Terminal Execution

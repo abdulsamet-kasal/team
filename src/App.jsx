@@ -115,6 +115,11 @@ export default function App() {
         setActiveToolEvent(null);
         break;
 
+      case "emergency_stop":
+        setIsProcessing(false);
+        setActiveToolEvent(null);
+        break;
+
       case "bot_status":
         setBotStatuses((prev) => ({ ...prev, [data.botId]: data.status }));
         if (data.targetId === activeId) {
@@ -168,17 +173,31 @@ export default function App() {
     }
   };
 
-  const handleSendMessage = async (content, images = []) => {
+  const handleSendMessage = async (content, images = [], goalMode = false) => {
     setIsProcessing(true);
     try {
       await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ targetId: activeId, content, images })
+        body: JSON.stringify({ targetId: activeId, content, images, goalMode })
       });
     } catch (err) {
       console.error("Send error:", err);
       setIsProcessing(false);
+    }
+  };
+
+  const handleEmergencyStop = async () => {
+    try {
+      await fetch("/api/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetId: activeId })
+      });
+      setIsProcessing(false);
+      setActiveToolEvent(null);
+    } catch (err) {
+      console.error("Emergency stop error:", err);
     }
   };
 
@@ -276,6 +295,7 @@ export default function App() {
         messages={messages}
         onSendMessage={handleSendMessage}
         onClearChat={handleClearChat}
+        onEmergencyStop={handleEmergencyStop}
         isProcessing={isProcessing}
         activeToolEvent={activeToolEvent}
         allBots={bots}
@@ -307,11 +327,13 @@ export default function App() {
         onSave={handleSaveSettings}
       />
 
+      {/* Resizable Terminal on the Right */}
       <TerminalDrawer
         isOpen={isTerminalOpen}
         onClose={() => setIsTerminalOpen(false)}
         terminalLogs={terminalLogs}
         onRunCommand={handleRunTerminalCommand}
+        onClearLogs={() => setTerminalLogs([])}
       />
     </div>
   );

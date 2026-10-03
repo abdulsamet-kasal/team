@@ -154,6 +154,23 @@ export const toolDefinitions = [
         properties: {}
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "complete_goal",
+      description: "GOAL MODUNDA: Kullanıcının belirlediği hedef ve isterler EKSİKSİZ, ÇALIŞIR ve TEST EDİLMİŞ şekilde tamamlandığında çağrılır. Goal modunu başarıyla sonlandırır.",
+      parameters: {
+        type: "object",
+        properties: {
+          summary: {
+            type: "string",
+            description: "Hedefin başarıyla nasıl tamamlandığına, yapılan geliştirmelere ve doğrulama sonuçlarına dair detaylı özet."
+          }
+        },
+        required: ["summary"]
+      }
+    }
   }
 ];
 
@@ -284,6 +301,13 @@ export async function executeToolCall(toolCall, { cwd, onOutput, runSubagent } =
       } catch (err) {
         return { error: `Hafıza okuma hatası: ${err.message}` };
       }
+    }
+
+    case "complete_goal": {
+      return {
+        isGoalCompleted: true,
+        summary: args.summary || "Hedef başarıyla tamamlandı!"
+      };
     }
 
     default:

@@ -1,5 +1,21 @@
 import { spawn } from "node:child_process";
 
+const activeProcesses = new Set();
+
+export function killAllActiveCommands() {
+  let count = 0;
+  for (const child of activeProcesses) {
+    try {
+      child.kill("SIGKILL");
+      count++;
+    } catch (e) {
+      console.error("Process kill error:", e);
+    }
+  }
+  activeProcesses.clear();
+  return count;
+}
+
 export function executeCommand(command, { cwd, onOutput, timeoutMs = 60000 } = {}) {
   return new Promise((resolve) => {
     const startTime = Date.now();
@@ -12,10 +28,19 @@ export function executeCommand(command, { cwd, onOutput, timeoutMs = 60000 } = {
       env: { ...process.env, TERM: "xterm-256color" }
     });
 
+    activeProcesses.add(child);
+
+    const cleanup = () => {
+      activeProcesses.delete(child);
+    };
+
     const timer = setTimeout(() => {
       if (!isSettled) {
         isSettled = true;
-        child.kill("SIGTERM");
+        cleanup();
+        try {
+          child.kill("SIGTERM");
+        } catch (e) {}
         const msg = "\n[Zaman aşımı: Komut 60 saniyeden uzun sürdüğü için sonlandırıldı]\n";
         stderr += msg;
         if (onOutput) onOutput({ type: "stderr", chunk: msg });
@@ -42,6 +67,7 @@ export function executeCommand(command, { cwd, onOutput, timeoutMs = 60000 } = {
 
     child.on("error", (err) => {
       clearTimeout(timer);
+      cleanup();
       if (!isSettled) {
         isSettled = true;
         const msg = `Hata: ${err.message}\n`;
@@ -58,6 +84,7 @@ export function executeCommand(command, { cwd, onOutput, timeoutMs = 60000 } = {
 
     child.on("close", (code) => {
       clearTimeout(timer);
+      cleanup();
       if (!isSettled) {
         isSettled = true;
         resolve({
