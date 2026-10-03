@@ -4,6 +4,8 @@ import ChatArea from "./components/ChatArea";
 import BotModal from "./components/BotModal";
 import SettingsModal from "./components/SettingsModal";
 import TerminalDrawer from "./components/TerminalDrawer";
+import MemoryModal from "./components/MemoryModal";
+import RoomModal from "./components/RoomModal";
 
 export default function App() {
   const [bots, setBots] = useState([]);
@@ -20,6 +22,8 @@ export default function App() {
   const [isBotModalOpen, setIsBotModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
+  const [isMemoryOpen, setIsMemoryOpen] = useState(false);
+  const [isRoomModalOpen, setIsRoomModalOpen] = useState(false);
 
   const wsRef = useRef(null);
 
@@ -164,13 +168,13 @@ export default function App() {
     }
   };
 
-  const handleSendMessage = async (content) => {
+  const handleSendMessage = async (content, images = []) => {
     setIsProcessing(true);
     try {
       await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ targetId: activeId, content })
+        body: JSON.stringify({ targetId: activeId, content, images })
       });
     } catch (err) {
       console.error("Send error:", err);
@@ -200,6 +204,23 @@ export default function App() {
       fetchInitialData();
     } catch (err) {
       console.error("Bot save error:", err);
+    }
+  };
+
+  const handleCreateRoom = async (roomData) => {
+    try {
+      const res = await fetch("/api/rooms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(roomData)
+      });
+      if (res.ok) {
+        const newRoom = await res.json();
+        setRooms((prev) => [...prev, newRoom]);
+        setActiveId(newRoom.id);
+      }
+    } catch (err) {
+      console.error("Room create error:", err);
     }
   };
 
@@ -242,6 +263,8 @@ export default function App() {
         activeId={activeId}
         onSelect={(id) => setActiveId(id)}
         onOpenNewBot={() => setIsBotModalOpen(true)}
+        onOpenRoomModal={() => setIsRoomModalOpen(true)}
+        onOpenMemory={() => setIsMemoryOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenTerminal={() => setIsTerminalOpen((prev) => !prev)}
         botStatuses={botStatuses}
@@ -263,6 +286,18 @@ export default function App() {
         isOpen={isBotModalOpen}
         onClose={() => setIsBotModalOpen(false)}
         onSave={handleSaveBot}
+      />
+
+      <RoomModal
+        isOpen={isRoomModalOpen}
+        onClose={() => setIsRoomModalOpen(false)}
+        onSave={handleCreateRoom}
+        allBots={bots}
+      />
+
+      <MemoryModal
+        isOpen={isMemoryOpen}
+        onClose={() => setIsMemoryOpen(false)}
       />
 
       <SettingsModal

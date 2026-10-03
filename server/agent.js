@@ -1,5 +1,6 @@
 import { store } from "./store.js";
 import { toolDefinitions, executeToolCall } from "./tools.js";
+import { memoryManager } from "./memory.js";
 
 export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, cwd, depth = 0 } = {}) {
   if (depth > 8) {
@@ -22,13 +23,33 @@ export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, 
     return bot.tools.includes(t.function.name);
   });
 
-  // Sistem promptu hazırla
+  // Sistem promptu hazırla (7 sabit kural ve proje hafızası dahil)
   const systemMessage = {
     role: "system",
-    content: `${bot.soul}\n\nÇalışma Dizini: ${cwd || settings.defaultCwd}\nSistem: Linux (CachyOS)\nKullanıcı: Samet Kasal (GitHub: abdulsamet-kasal)`
+    content: `${bot.soul}\n\n${memoryManager.getMemoryPrompt()}\n\nÇalışma Dizini: ${cwd || settings.defaultCwd}\nSistem: Linux (CachyOS)\nKullanıcı: Samet Kasal (GitHub: abdulsamet-kasal)`
   };
 
-  const messagesPayload = [systemMessage, ...history];
+  // Multimodal (Görsel) desteği: Eğer kullanıcı görsel yüklediyse OpenAI/Gemini formatına dönüştür
+  const formattedHistory = history.map(m => {
+    if (m.images && Array.isArray(m.images) && m.images.length > 0) {
+      return {
+        role: m.role,
+        content: [
+          { type: "text", text: m.content || "" },
+          ...m.images.map(img => ({
+            type: "image_url",
+            image_url: { url: img }
+          }))
+        ]
+      };
+    }
+    return {
+      role: m.role,
+      content: m.content || ""
+    };
+  });
+
+  const messagesPayload = [systemMessage, ...formattedHistory];
 
   const requestBody = {
     model,
