@@ -2,9 +2,13 @@ import { store } from "./store.js";
 import { toolDefinitions, executeToolCall } from "./tools.js";
 import { memoryManager } from "./memory.js";
 
-export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, cwd, depth = 0 } = {}) {
+export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, cwd, depth = 0, abortSignal } = {}) {
+  if (abortSignal && abortSignal.aborted) {
+    return { reply: "🛑 İşlem kullanıcı tarafından acilen durduruldu.", aborted: true, isGoalCompleted: false };
+  }
+
   if (depth > 8) {
-    return "Maksimum özyineleme derinliğine ulaşıldı. Görev durduruldu.";
+    return { reply: "Maksimum özyineleme derinliğine ulaşıldı. Görev durduruldu.", aborted: false, isGoalCompleted: false };
   }
 
   const bot = store.getBot(botId);
@@ -60,13 +64,18 @@ export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, 
   };
 
   try {
+    if (abortSignal && abortSignal.aborted) {
+      return { reply: "🛑 İşlem acilen durduruldu.", aborted: true, isGoalCompleted: false };
+    }
+
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${apiKey}`
       },
-      body: JSON.stringify(requestBody)
+      body: JSON.stringify(requestBody),
+      signal: abortSignal
     });
 
     if (!response.ok) {
@@ -81,12 +90,17 @@ export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, 
     }
 
     const message = choice.message;
+    let goalCompletedInTurn = false;
 
     // Model bir veya daha fazla araç çağırdıysa
     if (message.tool_calls && message.tool_calls.length) {
       const toolCallMessages = [];
 
       for (const toolCall of message.tool_calls) {
+        if (abortSignal && abortSignal.aborted) {
+          return { reply: "🛑 İşlem acilen durduruldu.", aborted: true, isGoalCompleted: false };
+        }
+
         if (onToolEvent) {
           onToolEvent({
             type: "tool_start",
@@ -104,7 +118,8 @@ export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, 
             onChunk,
             onToolEvent,
             cwd,
-            depth: depth + 1
+            depth: depth + 1,
+            abortSignal
           });
         };
 
@@ -121,6 +136,10 @@ export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, 
           },
           runSubagent: subagentRunner
         });
+
+        if (result && result.isGoalCompleted) {
+          goalCompletedInTurn = true;
+        }
 
         if (onToolEvent) {
           onToolEvent({
@@ -145,12 +164,19 @@ export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, 
         ...toolCallMessages
       ];
 
-      return await runAgentTurn(botId, nextHistory, {
+      const recursiveResult = await runAgentTurn(botId, nextHistory, {
         onChunk,
         onToolEvent,
         cwd,
-        depth: depth + 1
+        depth: depth + 1,
+        abortSignal
       });
+
+      return {
+        reply: recursiveResult.reply,
+        aborted: recursiveResult.aborted,
+        isGoalCompleted: goalCompletedInTurn || recursiveResult.isGoalCompleted
+      };
     }
 
     // Normal metin cevabı
@@ -158,8 +184,15 @@ export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, 
     if (onChunk) {
       onChunk(replyContent);
     }
-    return replyContent;
+    return {
+      reply: replyContent,
+      aborted: false,
+      isGoalCompleted: goalCompletedInTurn
+    };
   } catch (err) {
+    if (abortSignal && abortSignal.aborted) {
+      return { reply: "🛑 İşlem acilen durduruldu.", aborted: true, isGoalCompleted: false };
+    }
     console.error(`Agent Turn Error (${bot.name}):`, err);
     throw err;
   }

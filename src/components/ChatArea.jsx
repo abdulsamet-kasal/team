@@ -1,18 +1,31 @@
 import React, { useState, useRef, useEffect } from "react";
 import MessageItem from "./MessageItem";
-import { Send, Trash2, Sparkles, Loader2, AtSign, Image as ImageIcon, X } from "lucide-react";
+import { 
+  Send, 
+  Trash2, 
+  Sparkles, 
+  Loader2, 
+  AtSign, 
+  Image as ImageIcon, 
+  X, 
+  Target, 
+  Octagon, 
+  ShieldAlert 
+} from "lucide-react";
 
 export default function ChatArea({ 
   target, 
   messages = [], 
   onSendMessage, 
   onClearChat,
+  onEmergencyStop,
   isProcessing = false,
   activeToolEvent = null,
   allBots = []
 }) {
   const [input, setInput] = useState("");
   const [selectedImages, setSelectedImages] = useState([]);
+  const [goalMode, setGoalMode] = useState(false);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -34,7 +47,7 @@ export default function ChatArea({
 
   const handleSend = () => {
     if ((!input.trim() && selectedImages.length === 0) || isProcessing) return;
-    onSendMessage(input.trim(), selectedImages);
+    onSendMessage(input.trim(), selectedImages, goalMode);
     setInput("");
     setSelectedImages([]);
     if (textareaRef.current) {
@@ -126,13 +139,27 @@ export default function ChatArea({
           </div>
         </div>
 
-        <button
-          onClick={onClearChat}
-          title="Sohbeti Temizle"
-          className="p-2 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-rose-400 transition-colors"
-        >
-          <Trash2 className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Emergency Stop Button (Prominent when running) */}
+          {isProcessing && (
+            <button
+              onClick={onEmergencyStop}
+              title="Tüm Botları ve Komutları Acil Durdur"
+              className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-medium text-xs flex items-center gap-1.5 shadow-md shadow-rose-600/30 animate-pulse transition-all cursor-pointer"
+            >
+              <Octagon className="w-3.5 h-3.5 fill-current" />
+              Acil Durdur
+            </button>
+          )}
+
+          <button
+            onClick={onClearChat}
+            title="Sohbeti Temizle"
+            className="p-2 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-rose-400 transition-colors"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {/* Messages Scroll Area */}
@@ -143,7 +170,7 @@ export default function ChatArea({
             <p className="font-medium text-zinc-300">{target.name} ile yeni bir görüşme başlatın</p>
             <p className="text-xs text-zinc-400 max-w-md text-center">
               {isRoom 
-                ? "Bu odada tüm ekip birlikte çalışır. '@everyone' veya '@botadı' şeklinde görev verebilirsiniz."
+                ? "Bu odada tüm ekip birlikte çalışır. Goal Modu açarak hedeflerinizin bitene kadar otonom sürdürülmesini sağlayabilirsiniz."
                 : target.description}
             </p>
           </div>
@@ -155,18 +182,32 @@ export default function ChatArea({
 
         {/* Live Processing Indicator */}
         {isProcessing && (
-          <div className="flex items-center gap-3 text-xs text-zinc-400 bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-3 w-fit animate-pulse">
-            <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
-            <div className="flex flex-col">
-              <span className="font-medium text-zinc-300">
-                {activeToolEvent ? `Araç Çalıştırılıyor: ${activeToolEvent.toolName || "İşlem"}` : "Düşünüyor ve kod yazıyor..."}
-              </span>
-              {activeToolEvent?.args && (
-                <span className="text-[11px] font-mono text-zinc-400 truncate max-w-sm">
-                  {activeToolEvent.args}
+          <div className="flex items-center justify-between gap-4 text-xs text-zinc-300 bg-zinc-900/90 border border-zinc-700/80 rounded-xl p-3 w-fit shadow-lg shadow-black/40 animate-pulse">
+            <div className="flex items-center gap-3">
+              <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
+              <div className="flex flex-col">
+                <span className="font-semibold text-zinc-200 flex items-center gap-2">
+                  {activeToolEvent ? `Araç Yürütülüyor: ${activeToolEvent.toolName || "İşlem"}` : "Ekip çalışıyor ve kod yazıyor..."}
+                  {goalMode && (
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                      🎯 GOAL MODU
+                    </span>
+                  )}
                 </span>
-              )}
+                {activeToolEvent?.args && (
+                  <span className="text-[11px] font-mono text-zinc-400 truncate max-w-sm">
+                    {activeToolEvent.args}
+                  </span>
+                )}
+              </div>
             </div>
+
+            <button
+              onClick={onEmergencyStop}
+              className="px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white font-medium text-[11px] flex items-center gap-1 transition-all"
+            >
+              <Octagon className="w-3 h-3 fill-current" /> Durdur
+            </button>
           </div>
         )}
 
@@ -175,29 +216,51 @@ export default function ChatArea({
 
       {/* Input Bar */}
       <div className="p-4 border-t border-zinc-800/80 bg-zinc-900/30 backdrop-blur-sm">
-        {/* Quick Mention Suggestions for Rooms */}
-        {isRoom && (
-          <div className="flex items-center gap-1.5 mb-2 overflow-x-auto pb-1 text-xs">
-            <span className="text-[11px] text-zinc-400 flex items-center gap-1 shrink-0 font-medium">
-              <AtSign className="w-3 h-3" /> Hızlı Etiket:
-            </span>
+        {/* Toolbar: Goal Mode Toggle & Mentions */}
+        <div className="flex items-center justify-between gap-2 mb-2 overflow-x-auto pb-1 text-xs">
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => insertMention("@everyone")}
-              className="px-2 py-0.5 rounded-full bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 text-[11px] border border-indigo-500/20 transition-colors"
+              type="button"
+              onClick={() => setGoalMode((prev) => !prev)}
+              title="Goal Modu: Hedefiniz tamamen bitene kadar ekip durmaksızın çalışır."
+              className={`px-2.5 py-1 rounded-full text-xs font-medium flex items-center gap-1.5 transition-all ${
+                goalMode
+                  ? "bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm shadow-amber-500/10"
+                  : "bg-zinc-800/90 text-zinc-400 hover:text-zinc-200 border border-zinc-700/60"
+              }`}
             >
-              @everyone
+              <Target className={`w-3.5 h-3.5 ${goalMode ? "text-amber-400 animate-spin" : ""}`} />
+              <span>{goalMode ? "🎯 Goal Modu Açık (Bitene Kadar Durma)" : "Goal Modu"}</span>
             </button>
-            {allBots.map((b) => (
-              <button
-                key={b.id}
-                onClick={() => insertMention(`@${b.name}`)}
-                className="px-2 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] border border-zinc-700/60 transition-colors"
-              >
-                @{b.name}
-              </button>
-            ))}
+
+            {isRoom && (
+              <>
+                <button
+                  onClick={() => insertMention("@everyone")}
+                  className="px-2 py-0.5 rounded-full bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 text-[11px] border border-indigo-500/20 transition-colors"
+                >
+                  @everyone
+                </button>
+                {allBots.slice(0, 4).map((b) => (
+                  <button
+                    key={b.id}
+                    onClick={() => insertMention(`@${b.name}`)}
+                    className="px-2 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] border border-zinc-700/60 transition-colors"
+                  >
+                    @{b.name}
+                  </button>
+                ))}
+              </>
+            )}
           </div>
-        )}
+
+          {goalMode && (
+            <div className="text-[11px] text-amber-400/90 font-medium flex items-center gap-1 shrink-0">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+              Hedef tamamlanana kadar durmaksızın icra edilir
+            </div>
+          )}
+        </div>
 
         {/* Selected Images Preview Strip */}
         {selectedImages.length > 0 && (
@@ -223,7 +286,9 @@ export default function ChatArea({
           </div>
         )}
 
-        <div className="flex items-end gap-2 bg-zinc-900 border border-zinc-800 focus-within:border-indigo-500/70 rounded-xl p-2 transition-all shadow-inner">
+        <div className={`flex items-end gap-2 bg-zinc-900 border ${
+          goalMode ? "border-amber-500/50 focus-within:border-amber-500" : "border-zinc-800 focus-within:border-indigo-500/70"
+        } rounded-xl p-2 transition-all shadow-inner`}>
           <input
             type="file"
             ref={fileInputRef}
@@ -250,9 +315,11 @@ export default function ChatArea({
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             placeholder={
-              isRoom 
-                ? "Tüm ekibe veya belirli bir uzmana görev yazın... (Görsel yapıştırabilirsiniz)" 
-                : `${target.name}'a mesaj veya görev yazın...`
+              goalMode
+                ? "🎯 Ulaşılacak hedefi ve isterleri yazın (Ekip tamamlanana kadar durmayacaktır)..."
+                : isRoom 
+                  ? "Tüm ekibe veya belirli bir uzmana görev yazın... (Görsel yapıştırabilirsiniz)" 
+                  : `${target.name}'a mesaj veya görev yazın...`
             }
             className="flex-1 bg-transparent text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none max-h-44 px-2 py-1 leading-normal"
           />
@@ -262,7 +329,9 @@ export default function ChatArea({
             disabled={(!input.trim() && selectedImages.length === 0) || isProcessing}
             className={`p-2.5 rounded-lg flex items-center justify-center transition-all ${
               (input.trim() || selectedImages.length > 0) && !isProcessing
-                ? "bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/20"
+                ? goalMode
+                  ? "bg-amber-600 hover:bg-amber-500 text-white shadow-md shadow-amber-600/30"
+                  : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/20"
                 : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
             }`}
           >
