@@ -20,6 +20,13 @@ export default function App() {
   const [lastActivity, setLastActivity] = useState(null);
   const [terminalLogs, setTerminalLogs] = useState([]);
 
+  // Sessions & Compact Memory
+  const [sessions, setSessions] = useState([]);
+  const [activeSessionId, setActiveSessionId] = useState(null);
+
+  // Responsive Mobile Drawer
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
   // Modals
   const [isBotModalOpen, setIsBotModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -46,12 +53,26 @@ export default function App() {
     };
   }, []);
 
-  // 2. Load Messages when Active Target changes
+  // 2. Load Messages and Sessions when Active Target changes
   useEffect(() => {
     if (activeId) {
       fetchMessages(activeId);
+      fetchSessions(activeId);
     }
   }, [activeId]);
+
+  const fetchSessions = async (targetId) => {
+    try {
+      const res = await fetch(`/api/sessions/${targetId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSessions(data.sessions || []);
+        setActiveSessionId(data.activeSessionId || null);
+      }
+    } catch (err) {
+      console.error("Sessions load error:", err);
+    }
+  };
 
   const fetchInitialData = async () => {
     try {
@@ -231,6 +252,16 @@ export default function App() {
         fetchInitialData();
         break;
 
+      case "session_created":
+      case "session_switched":
+      case "session_compacted":
+      case "session_deleted":
+        if (data.targetId === activeId) {
+          fetchSessions(activeId);
+          fetchMessages(activeId);
+        }
+        break;
+
       default:
         break;
     }
@@ -271,6 +302,68 @@ export default function App() {
       setMessages([]);
     } catch (err) {
       console.error("Clear error:", err);
+    }
+  };
+
+  const handleCreateSession = async (title) => {
+    try {
+      const res = await fetch(`/api/sessions/${activeId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: title || "Yeni Sohbet" })
+      });
+      if (res.ok) {
+        await fetchSessions(activeId);
+        await fetchMessages(activeId);
+      }
+    } catch (err) {
+      console.error("Create session error:", err);
+    }
+  };
+
+  const handleSwitchSession = async (sessionId) => {
+    try {
+      const res = await fetch(`/api/sessions/${activeId}/switch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId })
+      });
+      if (res.ok) {
+        setActiveSessionId(sessionId);
+        await fetchSessions(activeId);
+        await fetchMessages(activeId);
+      }
+    } catch (err) {
+      console.error("Switch session error:", err);
+    }
+  };
+
+  const handleCompactSession = async () => {
+    try {
+      const res = await fetch(`/api/sessions/${activeId}/compact`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+      if (res.ok) {
+        await fetchSessions(activeId);
+        await fetchMessages(activeId);
+      }
+    } catch (err) {
+      console.error("Compact session error:", err);
+    }
+  };
+
+  const handleDeleteSession = async (sessionId) => {
+    try {
+      const res = await fetch(`/api/sessions/${activeId}/${sessionId}`, {
+        method: "DELETE"
+      });
+      if (res.ok) {
+        await fetchSessions(activeId);
+        await fetchMessages(activeId);
+      }
+    } catch (err) {
+      console.error("Delete session error:", err);
     }
   };
 
@@ -345,20 +438,36 @@ export default function App() {
   const currentTask = activeTasks[activeId] || Object.values(activeTasks)[0] || null;
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-zinc-950 text-zinc-100">
-      {/* Sidebar */}
-      <Sidebar
-        bots={bots}
-        rooms={rooms}
-        activeId={activeId}
-        onSelect={(id) => setActiveId(id)}
-        onOpenNewBot={() => setIsBotModalOpen(true)}
-        onOpenRoomModal={() => setIsRoomModalOpen(true)}
-        onOpenMemory={() => setIsMemoryOpen(true)}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-        onOpenTerminal={() => setIsTerminalOpen((prev) => !prev)}
-        botStatuses={combinedBotStatuses}
-      />
+    <div className="flex h-screen w-screen overflow-hidden bg-zinc-950 text-zinc-100 relative">
+      {/* Mobile Drawer Backdrop */}
+      {isSidebarOpen && (
+        <div 
+          onClick={() => setIsSidebarOpen(false)} 
+          className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm md:hidden transition-opacity" 
+        />
+      )}
+
+      {/* Sidebar (Responsive drawer on mobile, static on desktop) */}
+      <div className={`fixed inset-y-0 left-0 z-50 md:static md:z-auto transition-transform duration-300 ease-in-out shrink-0 ${
+        isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
+      }`}>
+        <Sidebar
+          bots={bots}
+          rooms={rooms}
+          activeId={activeId}
+          onSelect={(id) => {
+            setActiveId(id);
+            setIsSidebarOpen(false);
+          }}
+          onCloseMobile={() => setIsSidebarOpen(false)}
+          onOpenNewBot={() => setIsBotModalOpen(true)}
+          onOpenRoomModal={() => setIsRoomModalOpen(true)}
+          onOpenMemory={() => setIsMemoryOpen(true)}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenTerminal={() => setIsTerminalOpen((prev) => !prev)}
+          botStatuses={combinedBotStatuses}
+        />
+      </div>
 
       {/* Main Chat Area */}
       <ChatArea
@@ -372,6 +481,14 @@ export default function App() {
         activeTask={currentTask}
         lastActivity={lastActivity}
         allBots={bots}
+        // Sessions & Responsive Controls
+        sessions={sessions}
+        activeSessionId={activeSessionId}
+        onCreateSession={handleCreateSession}
+        onSwitchSession={handleSwitchSession}
+        onCompactSession={handleCompactSession}
+        onDeleteSession={handleDeleteSession}
+        onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
       />
 
       {/* Modals & Drawers */}

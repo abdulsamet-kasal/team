@@ -8,7 +8,8 @@ import {
   CheckCircle2, 
   Sparkles,
   Bot,
-  Brain
+  Brain,
+  X
 } from "lucide-react";
 
 export default function Sidebar({ 
@@ -16,6 +17,7 @@ export default function Sidebar({
   rooms = [], 
   activeId, 
   onSelect, 
+  onCloseMobile,
   onOpenNewBot, 
   onOpenRoomModal,
   onOpenMemory,
@@ -38,7 +40,7 @@ export default function Sidebar({
   };
 
   return (
-    <aside className="w-72 bg-zinc-900/90 border-r border-zinc-800/80 flex flex-col h-full select-none backdrop-blur-md">
+    <aside className="w-72 bg-zinc-900/95 border-r border-zinc-800/80 flex flex-col h-full select-none backdrop-blur-md shadow-2xl md:shadow-none">
       {/* Header */}
       <div className="p-4 border-b border-zinc-800/80 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
@@ -72,6 +74,15 @@ export default function Sidebar({
           >
             <Settings className="w-4 h-4" />
           </button>
+          {onCloseMobile && (
+            <button
+              onClick={onCloseMobile}
+              title="Menüyü Kapat"
+              className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-white md:hidden transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
 
