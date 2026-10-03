@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { X, Terminal, Play, Trash2, ArrowUpRight, GripVertical } from "lucide-react";
+import { X, Terminal, Play, Trash2, ArrowUpRight, GripVertical, Copy, Check } from "lucide-react";
 
 export default function TerminalDrawer({ 
   isOpen, 
@@ -10,6 +10,7 @@ export default function TerminalDrawer({
   isRunning = false 
 }) {
   const [inputCmd, setInputCmd] = useState("");
+  const [copiedLogs, setCopiedLogs] = useState(false);
   const [width, setWidth] = useState(() => {
     if (typeof window !== "undefined") {
       return Math.min(Math.max(window.innerWidth * 0.38, 450), 750);
@@ -81,13 +82,13 @@ export default function TerminalDrawer({
   return (
     <div 
       style={{ width: `${width}px` }}
-      className="fixed top-0 right-0 bottom-0 z-40 bg-zinc-950/98 border-l border-zinc-800 backdrop-blur-xl flex flex-col shadow-2xl transition-all duration-75 select-none"
+      className="fixed top-0 right-0 bottom-0 z-40 bg-zinc-950/98 border-l border-zinc-800 backdrop-blur-xl flex flex-col shadow-2xl transition-all duration-75 select-text"
     >
       {/* Draggable Resize Handle on the Left Edge */}
       <div
         onMouseDown={handleMouseDown}
         title="Yeniden Boyutlandırmak İçin Sürükleyin"
-        className={`absolute left-0 top-0 bottom-0 w-2.5 -translate-x-1.5 cursor-col-resize flex items-center justify-center group z-50 transition-colors ${
+        className={`absolute left-0 top-0 bottom-0 w-2.5 -translate-x-1.5 cursor-col-resize flex items-center justify-center group z-50 transition-colors select-none ${
           isDragging ? "bg-indigo-500/70" : "hover:bg-indigo-500/40"
         }`}
       >
@@ -114,11 +115,27 @@ export default function TerminalDrawer({
         </div>
 
         <div className="flex items-center gap-1.5">
+          {terminalLogs.length > 0 && (
+            <button
+              onClick={() => {
+                const allText = terminalLogs.map(l => (l.type === "command" ? `$ ${l.text}` : l.text)).join("\n");
+                navigator.clipboard.writeText(allText);
+                setCopiedLogs(true);
+                setTimeout(() => setCopiedLogs(false), 2000);
+              }}
+              title="Tüm Terminal Loglarını Kopyala"
+              className="px-2 py-1 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors flex items-center gap-1 text-[11px] cursor-pointer"
+            >
+              {copiedLogs ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              <span className="hidden sm:inline">{copiedLogs ? "Kopyalandı" : "Tümünü Kopyala"}</span>
+            </button>
+          )}
+
           {onClearLogs && (
             <button
               onClick={onClearLogs}
               title="Terminal Çıktılarını Temizle"
-              className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+              className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
@@ -126,7 +143,7 @@ export default function TerminalDrawer({
           <button
             onClick={onClose}
             title="Terminali Gizle (Ctrl+`)"
-            className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+            className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>

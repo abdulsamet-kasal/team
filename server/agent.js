@@ -36,9 +36,14 @@ export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, 
   // Multimodal (Görsel) desteği ve Akıllı Rol Eşleme:
   // Eğer bir mesaj başka bir bota aitse, Gemini'nin "model turn ile bitemez" kuralını ihlal etmemek
   // ve ekip işbirliğini sağlamak için o mesajı kullanıcı (ekip arkadaşı girdisi) olarak formatla.
-  const formattedHistory = history.map(m => {
+  let formattedHistory = history.map(m => {
     let effectiveRole = m.role;
     let effectiveContent = m.content || "";
+
+    // Tekil mesaj güvenlik sınırı (max 25.000 karakter)
+    if (typeof effectiveContent === "string" && effectiveContent.length > 25000) {
+      effectiveContent = effectiveContent.slice(0, 12500) + "\n\n... [⚠️ İçerik token sınırını aşmamak için kırpıldı] ...\n\n" + effectiveContent.slice(-12500);
+    }
 
     if (m.role === "assistant") {
       if (m.botId && m.botId !== bot.id) {
@@ -72,6 +77,22 @@ export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, 
 
     return mObj;
   });
+
+  // Token Güvenlik Duvarı: Toplam karakter bütçesi kontrolü (Max 350.000 karakter ~ 90.000 token)
+  // Gemini'nin 1.048.576 token limitine veya 9Router 503 hatasına düşmeyi kesinlikle engeller.
+  let totalChars = formattedHistory.reduce((sum, m) => sum + (typeof m.content === "string" ? m.content.length : 1000), 0);
+  if (totalChars > 350000 && formattedHistory.length > 4) {
+    const firstMsg = formattedHistory[0]; // Ana kullanıcı isteği / hedef
+    const recentMsgs = formattedHistory.slice(-8); // En son 8 adım
+    formattedHistory = [
+      firstMsg,
+      {
+        role: "user",
+        content: `[⚠️ Sistem Notu: Konuşma ve araç geçmişi token sınırına yaklaştığı için önceki ${formattedHistory.length - 9} adım otomatik olarak özetlendi. Yukarıdaki ana hedefe odaklanarak çalışmaya devam et.]`
+      },
+      ...recentMsgs
+    ];
+  }
 
   // Gemini Kuralı Garantisi: Gemini istekleri ASLA normal bir model/assistant cevabıyla bitemez!
   // Eğer son mesaj araç çağırmayan bir assistant ise, devam talimatı ekle.
@@ -184,10 +205,15 @@ export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, 
           });
         }
 
+        const rawResultStr = typeof result === "string" ? result : JSON.stringify(result);
+        const safeResultStr = rawResultStr.length > 25000 
+          ? rawResultStr.slice(0, 12500) + `\n\n... [⚠️ Çıktı çok uzun (${rawResultStr.length.toLocaleString()} karakter), token sınırını korumak için orta kısım kırpıldı] ...\n\n` + rawResultStr.slice(-12500)
+          : rawResultStr;
+
         toolCallMessages.push({
           role: "tool",
           tool_call_id: toolCall.id,
-          content: typeof result === "string" ? result : JSON.stringify(result)
+          content: safeResultStr
         });
       }
 

@@ -50,7 +50,7 @@ export default function MessageItem({ message }) {
       }`}>
         {/* Header for Bot */}
         {!isUser && (
-          <div className="flex items-center justify-between gap-3 mb-2 pb-1.5 border-b border-zinc-800 text-xs">
+          <div className="flex items-center justify-between gap-3 mb-2 pb-1.5 border-b border-zinc-800 text-xs select-none">
             <div className="flex items-center gap-2">
               <span className="font-semibold text-zinc-200 flex items-center gap-1.5">
                 {message.botName}
@@ -62,15 +62,27 @@ export default function MessageItem({ message }) {
                 </span>
               )}
             </div>
-            <span className="text-[10px] text-zinc-400 font-mono">
-              {new Date(message.timestamp).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })}
-            </span>
+            <div className="flex items-center gap-2 text-zinc-400">
+              <span className="text-[10px] font-mono">
+                {new Date(message.timestamp).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })}
+              </span>
+              {message.content && (
+                <button
+                  onClick={() => copyToClipboard(message.content)}
+                  title="Mesajı Kopyala"
+                  className="px-1.5 py-0.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors flex items-center gap-1 text-[11px] cursor-pointer"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span className="text-[10px]">{copied ? "Kopyalandı" : "Kopyala"}</span>
+                </button>
+              )}
+            </div>
           </div>
         )}
 
         {/* Live Status Bar (if working) */}
         {message.isLive && message.currentStatus && (
-          <div className="flex items-center gap-2 mb-3 p-2 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs">
+          <div className="flex items-center gap-2 mb-3 p-2 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs select-text">
             <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" />
             <span className="font-mono text-[11px] truncate">
               {message.currentStatus}
@@ -80,7 +92,7 @@ export default function MessageItem({ message }) {
 
         {/* Tool Execution Cards (Real-time and finished) */}
         {!isUser && message.toolEvents && message.toolEvents.length > 0 && (
-          <div className="space-y-2 mb-3">
+          <div className="space-y-2 mb-3 select-text">
             {message.toolEvents.map((event, idx) => {
               if (event.type === "tool_finish") {
                 return <ToolCard key={idx} event={event} />;
@@ -117,7 +129,7 @@ export default function MessageItem({ message }) {
         {/* Message Text (if any content generated yet) */}
         {message.content ? (
           <div 
-            className="prose prose-invert prose-sm max-w-none text-zinc-200 leading-normal break-words"
+            className="prose prose-invert prose-sm max-w-none text-zinc-200 leading-normal break-words select-text"
             dangerouslySetInnerHTML={renderMarkdown(message.content)} 
           />
         ) : message.isLive ? (
@@ -126,10 +138,20 @@ export default function MessageItem({ message }) {
           </div>
         ) : null}
 
-        {/* User Timestamp */}
+        {/* User Footer: Timestamp & Copy Button */}
         {isUser && (
-          <div className="text-[10px] text-indigo-200/70 text-right mt-1 font-mono">
-            {new Date(message.timestamp).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })}
+          <div className="flex items-center justify-end gap-2 text-[10px] text-indigo-200/80 mt-1.5 font-mono select-none">
+            <span>
+              {new Date(message.timestamp).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })}
+            </span>
+            <button
+              onClick={() => copyToClipboard(message.content || "")}
+              title="Mesajı Kopyala"
+              className="px-1.5 py-0.5 rounded hover:bg-indigo-700/60 text-indigo-200 hover:text-white transition-colors flex items-center gap-1 cursor-pointer"
+            >
+              {copied ? <Check className="w-3 h-3 text-emerald-300" /> : <Copy className="w-3 h-3" />}
+              <span className="text-[10px]">{copied ? "Kopyalandı" : "Kopyala"}</span>
+            </button>
           </div>
         )}
       </div>
@@ -138,31 +160,66 @@ export default function MessageItem({ message }) {
 }
 
 function RunningToolCard({ event }) {
+  const [copied, setCopied] = useState(false);
   let cmdInfo = "";
   try {
     const parsed = JSON.parse(event.args || "{}");
     cmdInfo = parsed.command || parsed.filePath || parsed.repoName || parsed.task || "";
   } catch (e) {}
 
+  const handleCopy = (e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(cmdInfo || event.args || "");
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
     <div className="rounded-lg bg-zinc-950 border border-indigo-500/40 p-2.5 text-xs font-mono text-zinc-300 flex items-center justify-between gap-2 shadow-sm animate-pulse">
-      <div className="flex items-center gap-2 truncate">
+      <div className="flex items-center gap-2 truncate flex-1 min-w-0">
         <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" />
         <span className="font-semibold text-indigo-300 shrink-0">
           {event.toolName === "execute_bash" ? "Bash:" : event.toolName}:
         </span>
-        <span className="text-[11px] text-zinc-300 truncate">
+        <span className="text-[11px] text-zinc-300 truncate select-all">
           {cmdInfo || event.args}
         </span>
       </div>
-      <span className="text-[10px] text-indigo-400 font-mono shrink-0">Yürütülüyor...</span>
+      <div className="flex items-center gap-2 shrink-0 select-none">
+        <button
+          onClick={handleCopy}
+          title="Komutu Kopyala"
+          className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors flex items-center gap-1 cursor-pointer"
+        >
+          {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+          <span className="text-[10px] hidden sm:inline">{copied ? "Kopyalandı" : "Kopyala"}</span>
+        </button>
+        <span className="text-[10px] text-indigo-400 font-mono">Yürütülüyor...</span>
+      </div>
     </div>
   );
 }
 
 function ToolCard({ event }) {
   const [expanded, setExpanded] = useState(false);
+  const [copiedSection, setCopiedSection] = useState(null);
   const { toolName, result } = event;
+
+  const copyText = (text, sectionName) => {
+    navigator.clipboard.writeText(typeof text === "string" ? text : JSON.stringify(text, null, 2));
+    setCopiedSection(sectionName);
+    setTimeout(() => setCopiedSection(null), 2000);
+  };
+
+  const getFullContent = () => {
+    if (!result) return "";
+    let parts = [];
+    if (result.stdout) parts.push(`STDOUT:\n${result.stdout}`);
+    if (result.stderr) parts.push(`STDERR:\n${result.stderr}`);
+    if (result.url) parts.push(`URL:\n${result.url}`);
+    if (result.result) parts.push(`RESULT:\n${typeof result.result === "string" ? result.result : JSON.stringify(result.result, null, 2)}`);
+    return parts.join("\n\n") || JSON.stringify(result, null, 2);
+  };
 
   const getToolIcon = () => {
     switch (toolName) {
@@ -191,49 +248,109 @@ function ToolCard({ event }) {
 
   return (
     <div className="rounded-lg bg-zinc-950 border border-zinc-800/90 text-xs overflow-hidden">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full px-3 py-2 flex items-center justify-between hover:bg-zinc-800/40 transition-colors text-left"
-      >
-        <div className="flex items-center gap-2 font-mono text-[11px] text-zinc-300 truncate">
+      <div className="w-full px-3 py-2 flex items-center justify-between hover:bg-zinc-800/40 transition-colors text-left">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-2 font-mono text-[11px] text-zinc-300 truncate flex-1 cursor-pointer"
+        >
           {getToolIcon()}
-          <span className="font-semibold text-zinc-200">{getToolTitle()}</span>
+          <span className="font-semibold text-zinc-200 truncate">{getToolTitle()}</span>
+        </button>
+
+        <div className="flex items-center gap-1.5 shrink-0 select-none">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              copyText(getFullContent(), "full");
+            }}
+            title="Tüm Çıktıyı Kopyala"
+            className="p-1 px-1.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 flex items-center gap-1 text-[11px] transition-colors cursor-pointer"
+          >
+            {copiedSection === "full" ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+            <span className="hidden sm:inline">{copiedSection === "full" ? "Kopyalandı" : "Kopyala"}</span>
+          </button>
+
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="p-1 rounded hover:bg-zinc-800 text-zinc-400 cursor-pointer"
+          >
+            {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </button>
         </div>
-        <div className="text-zinc-500">
-          {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-        </div>
-      </button>
+      </div>
 
       {expanded && (
-        <div className="p-3 bg-zinc-950/90 border-t border-zinc-800/80 font-mono text-[11px] space-y-2 overflow-x-auto max-h-60">
+        <div className="p-3 bg-zinc-950/90 border-t border-zinc-800/80 font-mono text-[11px] space-y-3 overflow-x-auto max-h-72 select-text">
           {result.stdout && (
-            <div>
-              <div className="text-[10px] text-zinc-400 uppercase font-semibold">Çıktı (Stdout):</div>
-              <pre className="text-zinc-300 whitespace-pre-wrap">{result.stdout}</pre>
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-[10px] text-zinc-400 uppercase font-semibold select-none">
+                <span>Çıktı (Stdout)</span>
+                <button
+                  onClick={() => copyText(result.stdout, "stdout")}
+                  className="px-1.5 py-0.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 flex items-center gap-1 text-[10px] cursor-pointer"
+                >
+                  {copiedSection === "stdout" ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedSection === "stdout" ? "Kopyalandı" : "Kopyala"}</span>
+                </button>
+              </div>
+              <pre className="p-2 rounded bg-zinc-900/80 border border-zinc-800 text-zinc-300 whitespace-pre-wrap select-text leading-relaxed">
+                {result.stdout}
+              </pre>
             </div>
           )}
+
           {result.stderr && (
-            <div>
-              <div className="text-[10px] text-rose-400 uppercase font-semibold">Hata (Stderr):</div>
-              <pre className="text-rose-300 whitespace-pre-wrap">{result.stderr}</pre>
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-[10px] text-rose-400 uppercase font-semibold select-none">
+                <span>Hata (Stderr)</span>
+                <button
+                  onClick={() => copyText(result.stderr, "stderr")}
+                  className="px-1.5 py-0.5 rounded hover:bg-zinc-800 text-rose-300 hover:text-rose-100 flex items-center gap-1 text-[10px] cursor-pointer"
+                >
+                  {copiedSection === "stderr" ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedSection === "stderr" ? "Kopyalandı" : "Kopyala"}</span>
+                </button>
+              </div>
+              <pre className="p-2 rounded bg-rose-950/20 border border-rose-900/40 text-rose-300 whitespace-pre-wrap select-text leading-relaxed">
+                {result.stderr}
+              </pre>
             </div>
           )}
+
           {result.url && (
-            <div>
+            <div className="flex items-center justify-between p-2 rounded bg-indigo-950/30 border border-indigo-500/20">
               <a 
                 href={result.url} 
                 target="_blank" 
-                rel="noreferrer"
+                rel="noreferrer" 
                 className="text-indigo-400 hover:underline flex items-center gap-1"
               >
                 🔗 Repoyu GitHub'da Aç ({result.url})
               </a>
+              <button
+                onClick={() => copyText(result.url, "url")}
+                className="p-1 rounded hover:bg-zinc-800 text-indigo-300 cursor-pointer"
+              >
+                {copiedSection === "url" ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
             </div>
           )}
+
           {result.result && (
-            <div>
-              <div className="text-[10px] text-zinc-400 uppercase font-semibold">Alt Ajan Yanıtı:</div>
-              <pre className="text-zinc-300 whitespace-pre-wrap">{typeof result.result === "string" ? result.result : JSON.stringify(result.result, null, 2)}</pre>
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-[10px] text-zinc-400 uppercase font-semibold select-none">
+                <span>Alt Ajan Yanıtı</span>
+                <button
+                  onClick={() => copyText(typeof result.result === "string" ? result.result : JSON.stringify(result.result, null, 2), "subagent")}
+                  className="px-1.5 py-0.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 flex items-center gap-1 text-[10px] cursor-pointer"
+                >
+                  {copiedSection === "subagent" ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedSection === "subagent" ? "Kopyalandı" : "Kopyala"}</span>
+                </button>
+              </div>
+              <pre className="p-2 rounded bg-zinc-900/80 border border-zinc-800 text-zinc-300 whitespace-pre-wrap select-text leading-relaxed">
+                {typeof result.result === "string" ? result.result : JSON.stringify(result.result, null, 2)}
+              </pre>
             </div>
           )}
         </div>

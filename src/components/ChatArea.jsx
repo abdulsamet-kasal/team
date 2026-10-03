@@ -10,7 +10,9 @@ import {
   X, 
   Target, 
   Octagon, 
-  ShieldAlert 
+  ShieldAlert,
+  Copy,
+  Check
 } from "lucide-react";
 
 export default function ChatArea({ 
@@ -28,6 +30,7 @@ export default function ChatArea({
   const [input, setInput] = useState("");
   const [selectedImages, setSelectedImages] = useState([]);
   const [goalMode, setGoalMode] = useState(false);
+  const [copiedCmd, setCopiedCmd] = useState(false);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -316,11 +319,24 @@ export default function ChatArea({
             {/* Çalıştırılan Komut / Argüman Varsa */}
             {activeToolEvent?.args && (
               <div className="bg-zinc-950/90 rounded-lg p-2.5 border border-zinc-800/90 font-mono text-xs text-emerald-400">
-                <div className="text-[10px] text-zinc-500 mb-1 flex items-center justify-between">
-                  <span>ÇALIŞTIRILAN KOMUT / ARAÇ</span>
-                  <span className="text-zinc-400">{activeToolEvent.toolName}</span>
+                <div className="text-[10px] text-zinc-500 mb-1.5 flex items-center justify-between select-none">
+                  <span className="flex items-center gap-1.5">
+                    <span>ÇALIŞTIRILAN KOMUT / ARAÇ:</span>
+                    <span className="text-zinc-300 font-semibold">{activeToolEvent.toolName}</span>
+                  </span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(activeToolEvent.args);
+                      setCopiedCmd(true);
+                      setTimeout(() => setCopiedCmd(false), 2000);
+                    }}
+                    className="px-1.5 py-0.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 flex items-center gap-1 text-[10px] cursor-pointer"
+                  >
+                    {copiedCmd ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedCmd ? "Kopyalandı" : "Komutu Kopyala"}</span>
+                  </button>
                 </div>
-                <div className="overflow-x-auto whitespace-pre-wrap break-all text-[11px] text-zinc-200">
+                <div className="overflow-x-auto whitespace-pre-wrap break-all text-[11px] text-zinc-200 select-text">
                   {activeToolEvent.args}
                 </div>
               </div>
