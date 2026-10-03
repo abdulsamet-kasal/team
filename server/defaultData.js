@@ -1,7 +1,7 @@
 export const defaultSettings = {
   apiBaseUrl: "http://localhost:20128/v1",
   apiKey: "sk-51adfc21050c0974-g8gj4b-3e65bca4",
-  defaultModel: "combo",
+  defaultModel: "ag/gemini-3.8-flash",
   defaultCwd: "/home/samet/Projeler/team",
   autoApproveCommands: true
 };
@@ -15,7 +15,7 @@ export const defaultBots = [
     color: "purple",
     avatar: "👑",
     role: "lead",
-    model: "combo",
+    model: "ag/gemini-3.8-flash",
     isChief: true,
     tools: ["execute_bash", "read_file", "write_file", "list_directory", "create_github_repo", "delegate_to_bot"],
     soul: `Sen bu yazılım geliştirme ekibinin Kıdemli Takım Lideri (Tech Lead & Chief of Staff) ve Baş Mimarsın.
@@ -43,7 +43,7 @@ Görevlerin:
     color: "blue",
     avatar: "🌐",
     role: "frontend",
-    model: "combo",
+    model: "ag/gemini-3.8-flash",
     isChief: false,
     tools: ["execute_bash", "read_file", "write_file", "list_directory"],
     soul: `Sen ekibin Kıdemli Web & Frontend Geliştiricisisin.
@@ -66,7 +66,7 @@ Kurallar:
     color: "green",
     avatar: "🗄️",
     role: "backend",
-    model: "combo",
+    model: "ag/gemini-3.8-flash",
     isChief: false,
     tools: ["execute_bash", "read_file", "write_file", "list_directory"],
     soul: `Sen ekibin Kıdemli Backend ve Veritabanı Mimarısın.
@@ -88,7 +88,7 @@ Kurallar:
     color: "cyan",
     avatar: "📱",
     role: "mobile",
-    model: "combo",
+    model: "ag/gemini-3.8-flash",
     isChief: false,
     tools: ["execute_bash", "read_file", "write_file", "list_directory"],
     soul: `Sen ekibin Kıdemli Mobil Uygulama Geliştiricisisin (Flutter & Dart Uzmanı).
@@ -112,7 +112,7 @@ Kritik Proje ve Sistem Standartları (Bu standartlara MUTLAKA uyacaksın):
     color: "red",
     avatar: "🚀",
     role: "devops",
-    model: "combo",
+    model: "ag/gemini-3.8-flash",
     isChief: false,
     tools: ["execute_bash", "read_file", "write_file", "list_directory", "create_github_repo"],
     soul: `Sen ekibin Kıdemli DevOps ve Sistem Altyapı Mühendisirsin.
@@ -135,7 +135,7 @@ Kurallar:
     color: "yellow",
     avatar: "🧪",
     role: "qa",
-    model: "combo",
+    model: "ag/gemini-3.8-flash",
     isChief: false,
     tools: ["execute_bash", "read_file", "write_file", "list_directory"],
     soul: `Sen ekibin Kıdemli QA (Kalite Güvence) ve Test Otomasyon Mühendisirsin.
@@ -154,7 +154,7 @@ Uzmanlık Alanların:
     color: "pink",
     avatar: "🎨",
     role: "designer",
-    model: "combo",
+    model: "ag/gemini-3.8-flash",
     isChief: false,
     tools: ["read_file", "write_file", "list_directory"],
     soul: `Sen ekibin Kıdemli UI/UX ve Ürün Tasarımcısısın.
