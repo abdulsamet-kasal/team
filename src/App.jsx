@@ -17,6 +17,7 @@ export default function App() {
   const [activeToolEvent, setActiveToolEvent] = useState(null);
   const [botStatuses, setBotStatuses] = useState({});
   const [activeTasks, setActiveTasks] = useState({});
+  const [lastActivity, setLastActivity] = useState(null);
   const [terminalLogs, setTerminalLogs] = useState([]);
 
   // Modals
@@ -54,11 +55,12 @@ export default function App() {
 
   const fetchInitialData = async () => {
     try {
-      const [botsRes, roomsRes, settingsRes, activeTasksRes] = await Promise.all([
+      const [botsRes, roomsRes, settingsRes, activeTasksRes, activityRes] = await Promise.all([
         fetch("/api/bots").then((r) => r.json()),
         fetch("/api/rooms").then((r) => r.json()),
         fetch("/api/settings").then((r) => r.json()),
-        fetch("/api/tasks/active").then((r) => r.json()).catch(() => ({}))
+        fetch("/api/tasks/active").then((r) => r.json()).catch(() => ({})),
+        fetch("/api/tasks/activity").then((r) => r.json()).catch(() => null)
       ]);
       setBots(botsRes);
       setRooms(roomsRes);
@@ -68,6 +70,9 @@ export default function App() {
         if (activeTasksRes[activeId]) {
           setIsProcessing(true);
         }
+      }
+      if (activityRes) {
+        setLastActivity(activityRes);
       }
       if (roomsRes.length && !activeId) {
         setActiveId(roomsRes[0].id);
@@ -117,6 +122,15 @@ export default function App() {
           if (data.activeTasks[activeId]) {
             setIsProcessing(true);
           }
+        }
+        if (data.lastActivity) {
+          setLastActivity(data.lastActivity);
+        }
+        break;
+
+      case "last_activity_updated":
+        if (data.lastActivity) {
+          setLastActivity(data.lastActivity);
         }
         break;
 
@@ -322,6 +336,14 @@ export default function App() {
     rooms.find((r) => r.id === activeId) ||
     bots.find((b) => b.id === activeId);
 
+  // Bot durumlarını aktif görevlerle birleştir (Sayfa yenilense bile çalışan botlar hemen "çalışıyor" gözüksün)
+  const combinedBotStatuses = { ...botStatuses };
+  Object.values(activeTasks).forEach((t) => {
+    if (t && t.botId) combinedBotStatuses[t.botId] = "working";
+  });
+
+  const currentTask = activeTasks[activeId] || Object.values(activeTasks)[0] || null;
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-zinc-950 text-zinc-100">
       {/* Sidebar */}
@@ -335,7 +357,7 @@ export default function App() {
         onOpenMemory={() => setIsMemoryOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenTerminal={() => setIsTerminalOpen((prev) => !prev)}
-        botStatuses={botStatuses}
+        botStatuses={combinedBotStatuses}
       />
 
       {/* Main Chat Area */}
@@ -347,7 +369,8 @@ export default function App() {
         onEmergencyStop={handleEmergencyStop}
         isProcessing={isProcessing}
         activeToolEvent={activeToolEvent}
-        activeTask={activeTasks[activeId]}
+        activeTask={currentTask}
+        lastActivity={lastActivity}
         allBots={bots}
       />
 

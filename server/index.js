@@ -28,7 +28,8 @@ wss.on("connection", (ws) => {
   ws.send(JSON.stringify({ 
     type: "init", 
     status: "connected",
-    activeTasks: store.getAllActiveTasks() 
+    activeTasks: store.getAllActiveTasks(),
+    lastActivity: store.getLastActivity()
   }));
 
   ws.on("close", () => {
@@ -57,9 +58,13 @@ app.post("/api/settings", (req, res) => {
   res.json(updated);
 });
 
-// Active Tasks
+// Active Tasks & Activity
 app.get("/api/tasks/active", (req, res) => {
   res.json(store.getAllActiveTasks());
+});
+
+app.get("/api/tasks/activity", (req, res) => {
+  res.json(store.getLastActivity());
 });
 
 // 2. Bots
@@ -277,13 +282,15 @@ app.post("/api/chat", async (req, res) => {
     broadcast({ type: "bot_status", botId: respondingBot.id, status: "thinking", targetId, rounds, goalMode });
 
     try {
-      const history = store.getMessages(targetId).map(m => ({
-        role: m.role,
-        content: m.content,
-        images: m.images,
-        botId: m.botId,
-        botName: m.botName
-      }));
+      const history = store.getMessages(targetId)
+        .filter(m => m.id !== botMsg.id && !m.isLive)
+        .map(m => ({
+          role: m.role,
+          content: m.content,
+          images: m.images,
+          botId: m.botId,
+          botName: m.botName
+        }));
 
       // Goal modunda botlara durmama talimatını hatırlat
       if (goalMode) {
@@ -321,6 +328,7 @@ app.post("/api/chat", async (req, res) => {
               activeCmd: cmdInfo
             };
             store.setActiveTask(targetId, updatedTask);
+            store.setLastActivity(updatedTask);
             broadcast({
               type: "message_updated",
               targetId,
@@ -334,6 +342,10 @@ app.post("/api/chat", async (req, res) => {
               type: "active_task_updated",
               targetId,
               task: updatedTask
+            });
+            broadcast({
+              type: "last_activity_updated",
+              lastActivity: store.getLastActivity()
             });
           } else if (event.type === "tool_finish") {
             const idx = accumulatedToolEvents.findIndex(e => e.toolCallId === event.toolCallId);
@@ -381,6 +393,19 @@ app.post("/api/chat", async (req, res) => {
         isGoalCompleted = true;
       }
 
+      const completedStatus = isGoalCompleted 
+        ? "Hedef başarıyla tamamlandı!" 
+        : (reply ? "İşlem adımı tamamlandı." : "İşlem tamamlandı.");
+
+      store.setLastActivity({
+        botId: respondingBot.id,
+        botName: respondingBot.name,
+        botAvatar: respondingBot.avatar,
+        currentStatus: completedStatus,
+        cwd: store.getSettings().defaultCwd,
+        targetId
+      });
+
       store.updateMessage(targetId, botMsg.id, {
         content: reply,
         toolEvents: accumulatedToolEvents,
@@ -400,6 +425,10 @@ app.post("/api/chat", async (req, res) => {
           currentStatus: null,
           isGoalCompleted
         }
+      });
+      broadcast({
+        type: "last_activity_updated",
+        lastActivity: store.getLastActivity()
       });
 
       // Otonom Takım İletişimi: Bot yanıtında başka bir ekip arkadaşını etiketlediyse zincire ekle
@@ -446,6 +475,7 @@ app.post("/api/chat", async (req, res) => {
     } finally {
       store.setActiveTask(targetId, null);
       broadcast({ type: "active_task_updated", targetId, task: null });
+      broadcast({ type: "last_activity_updated", lastActivity: store.getLastActivity() });
       broadcast({ type: "bot_status", botId: respondingBot.id, status: "idle", targetId });
     }
   }
@@ -489,8 +519,19 @@ app.post("/api/terminal/exec", async (req, res) => {
 // Static Client Serving (Production Build)
 const distPath = path.resolve("./dist");
 if (fs.existsSync(distPath)) {
-  app.use(express.static(distPath));
+  app.use(express.static(distPath, {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.html')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+      }
+    }
+  }));
   app.use((req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.sendFile(path.join(distPath, "index.html"));
   });
 }
