@@ -2,13 +2,45 @@ import { store } from "./store.js";
 import { toolDefinitions, executeToolCall } from "./tools.js";
 import { memoryManager } from "./memory.js";
 
-export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, cwd, depth = 0, abortSignal } = {}) {
+// Token Tasarrufu & Sıkıştırma: Geçmişteki eski araç sonuçlarını damıt
+function compactToolHistory(messages) {
+  const toolIndices = [];
+  messages.forEach((m, idx) => {
+    if (m.role === "tool") toolIndices.push(idx);
+  });
+
+  // Sadece en son 2 araç çıktısını tam detaylı tut; öncekileri özetle (%90 token tasarrufu)
+  const keepIndices = new Set(toolIndices.slice(-2));
+
+  return messages.map((m, idx) => {
+    if (m.role === "tool" && !keepIndices.has(idx)) {
+      const origContent = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+      if (origContent.length <= 250) return m;
+
+      const firstLine = origContent.trim().split("\n")[0].slice(0, 100);
+      return {
+        ...m,
+        content: `[✓ Araç Çıktısı: "${firstLine}..." (${origContent.length.toLocaleString()} karakterlik çıktı önceki adımda işlendi)]`
+      };
+    }
+    return m;
+  });
+}
+
+export async function runAgentTurn(botId, history = [], { targetId, onChunk, onToolEvent, cwd, depth = 0, abortSignal } = {}) {
   if (abortSignal && abortSignal.aborted) {
-    return { reply: "🛑 İşlem kullanıcı tarafından acilen durduruldu.", aborted: true, isGoalCompleted: false };
+    return { reply: "🛑 İşlem kullanıcı tarafından acilen durduruldu.", aborted: true, isGoalCompleted: false, needsContinuation: false };
   }
 
-  if (depth > 40) {
-    return { reply: "Maksimum özyineleme derinliğine (40 adım) ulaşıldı. Görev durduruldu.", aborted: false, isGoalCompleted: false };
+  // Tek bir recursion zincirinde aşırı derinliği 25 ile sınırla; ancak görevi DURDURMA!
+  // Kontrolü ana döngüye (next round) devrederek taze derinlikle devam etmesini sağla.
+  if (depth >= 25) {
+    return { 
+      reply: "⚙️ [Aşama Tamamlandı]: 25 işlem adımı başarıyla icra edildi. Görev henüz bitmediği için sonraki döngüye kesintisiz devam ediliyor...", 
+      aborted: false, 
+      isGoalCompleted: false,
+      needsContinuation: true 
+    };
   }
 
   const bot = store.getBot(botId);
@@ -27,10 +59,20 @@ export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, 
     return bot.tools.includes(t.function.name);
   });
 
-  // Sistem promptu hazırla (7 sabit kural ve proje hafızası dahil)
+  // Aktif oturumun sıkıştırılmış hafızası varsa ekle (Compact Memory Entegrasyonu)
+  let sessionSummaryContext = "";
+  try {
+    const lookupTarget = targetId || botId;
+    const activeSession = store.getActiveSession(lookupTarget);
+    if (activeSession && activeSession.summary) {
+      sessionSummaryContext = `\n\n📌 [ÖNCEKİ SOHBET VE GÖREV ÖZETİ (COMPACT MEMORY)]:\n${activeSession.summary}\n(Yukarıdaki özet bağlamı esas alarak çalışmaya devam et.)`;
+    }
+  } catch (e) {}
+
+  // Sistem promptu hazırla (7 sabit kural, proje hafızası ve compact özet dahil)
   const systemMessage = {
     role: "system",
-    content: `${bot.soul}\n\n${memoryManager.getMemoryPrompt()}\n\nÇalışma Dizini: ${cwd || settings.defaultCwd}\nSistem: Linux (CachyOS)\nKullanıcı: Samet Kasal (GitHub: abdulsamet-kasal)`
+    content: `${bot.soul}\n\n${memoryManager.getMemoryPrompt()}${sessionSummaryContext}\n\nÇalışma Dizini: ${cwd || settings.defaultCwd}\nSistem: Linux (CachyOS)\nKullanıcı: Samet Kasal (GitHub: abdulsamet-kasal)`
   };
 
   // Multimodal (Görsel) desteği ve Akıllı Rol Eşleme:
@@ -77,6 +119,9 @@ export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, 
 
     return mObj;
   });
+
+  // Token Tasarrufu: Eski araç çıktılarını damıt
+  formattedHistory = compactToolHistory(formattedHistory);
 
   // Token Güvenlik Duvarı: Toplam karakter bütçesi kontrolü (Max 350.000 karakter ~ 90.000 token)
   // Gemini'nin 1.048.576 token limitine veya 9Router 503 hatasına düşmeyi kesinlikle engeller.
@@ -170,6 +215,7 @@ export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, 
         // Subagent yeteneği: delegate_to_bot çağrıldığında
         const subagentRunner = async (subBotId, subTask) => {
           return await runAgentTurn(subBotId, [{ role: "user", content: subTask }], {
+            targetId,
             onChunk,
             onToolEvent,
             cwd,
@@ -225,6 +271,7 @@ export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, 
       ];
 
       const recursiveResult = await runAgentTurn(botId, nextHistory, {
+        targetId,
         onChunk,
         onToolEvent,
         cwd,
@@ -235,7 +282,8 @@ export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, 
       return {
         reply: recursiveResult.reply,
         aborted: recursiveResult.aborted,
-        isGoalCompleted: goalCompletedInTurn || recursiveResult.isGoalCompleted
+        isGoalCompleted: goalCompletedInTurn || recursiveResult.isGoalCompleted,
+        needsContinuation: recursiveResult.needsContinuation || false
       };
     }
 

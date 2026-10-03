@@ -149,6 +149,40 @@ app.delete("/api/messages/:targetId", (req, res) => {
   res.json({ success: true });
 });
 
+// 5.1 Sessions (Çoklu Oturum & Compact Bellek)
+app.get("/api/sessions/:targetId", (req, res) => {
+  res.json(store.getSessions(req.params.targetId));
+});
+
+app.post("/api/sessions/:targetId", (req, res) => {
+  const { title } = req.body;
+  const newSession = store.createSession(req.params.targetId, title);
+  broadcast({ type: "session_created", targetId: req.params.targetId, session: newSession });
+  res.json(newSession);
+});
+
+app.post("/api/sessions/:targetId/switch", (req, res) => {
+  const { sessionId } = req.body;
+  const switched = store.switchSession(req.params.targetId, sessionId);
+  if (!switched) return res.status(404).json({ error: "Oturum bulunamadı." });
+  broadcast({ type: "session_switched", targetId: req.params.targetId, sessionId, session: switched });
+  res.json(switched);
+});
+
+app.post("/api/sessions/:targetId/compact", (req, res) => {
+  const { summary } = req.body;
+  const compacted = store.compactSession(req.params.targetId, summary);
+  if (!compacted) return res.status(404).json({ error: "Oturum bulunamadı." });
+  broadcast({ type: "session_compacted", targetId: req.params.targetId, session: compacted });
+  res.json(compacted);
+});
+
+app.delete("/api/sessions/:targetId/:sessionId", (req, res) => {
+  const success = store.deleteSession(req.params.targetId, req.params.sessionId);
+  broadcast({ type: "session_deleted", targetId: req.params.targetId, sessionId: req.params.sessionId });
+  res.json({ success });
+});
+
 // 6. Emergency Stop API
 app.post("/api/stop", (req, res) => {
   const { targetId } = req.body;
@@ -242,9 +276,9 @@ app.post("/api/chat", async (req, res) => {
     botQueue.push(bot);
   }
 
-  // Otonom Çoklu Bot Döngüsü: Goal Modunda 25 adıma kadar bitene kadar devam eder!
+  // Otonom Çoklu Bot Döngüsü: Goal Modunda veya devam eden görevlerde bitene kadar sürer!
   let rounds = 0;
-  const maxRounds = goalMode ? 25 : (isRoom ? 6 : 1);
+  const maxRounds = goalMode ? 50 : (isRoom ? 12 : 5);
   let isGoalCompleted = false;
 
   while (botQueue.length > 0 && rounds < maxRounds && !controller.signal.aborted && !isGoalCompleted) {
@@ -303,6 +337,7 @@ app.post("/api/chat", async (req, res) => {
       let accumulatedToolEvents = [];
 
       const result = await runAgentTurn(respondingBot.id, history, {
+        targetId,
         cwd: store.getSettings().defaultCwd,
         abortSignal: controller.signal,
         onToolEvent: (event) => {
@@ -444,13 +479,22 @@ app.post("/api/chat", async (req, res) => {
             botQueue.push(candidate);
           }
         }
+      }
 
-        // Goal Modu Garantisi: Eğer botQueue bittiyse ve hedef henüz complete_goal ile sonuçlanmadıysa,
-        // Tech Lead veya QA'yı tekrar devreye sokarak görevi denetlemesini ve bitirmesini sağla!
-        if (botQueue.length === 0 && goalMode && !isGoalCompleted && rounds < maxRounds) {
+      // Kesintisiz Görev & Goal Modu Devamı:
+      // Eğer hedef henüz bitmediyse veya bot 25 adım ara aşamaya ulaştıysa (needsContinuation),
+      // görevi durdurma! Kontrolü bir sonraki tura aktararak otonom devam et.
+      if (!isGoalCompleted && (result.needsContinuation || goalMode) && rounds < maxRounds && !controller.signal.aborted) {
+        if (!isRoom) {
+          // Bireysel bot sohbetinde aynı bot göreve devam eder
+          if (botQueue.length === 0) {
+            botQueue.push(respondingBot);
+          }
+        } else if (botQueue.length === 0) {
+          // Oda sohbetinde denetleyici (supervisor) veya aktif bot devreye girer
           const supervisor = (rounds % 2 === 0) 
             ? (allBots.find(b => b.id === "bot-qa") || allBots[0])
-            : (allBots.find(b => b.isChief || b.id === "bot-lead") || allBots[0]);
+            : (allBots.find(b => b.isChief || b.id === "bot-lead") || respondingBot);
           botQueue.push(supervisor);
         }
       }
