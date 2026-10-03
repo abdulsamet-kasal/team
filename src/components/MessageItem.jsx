@@ -9,7 +9,9 @@ import {
   ChevronRight, 
   Check, 
   Copy, 
-  Users2
+  Users2,
+  Loader2,
+  Activity
 } from "lucide-react";
 
 export default function MessageItem({ message }) {
@@ -49,21 +51,49 @@ export default function MessageItem({ message }) {
         {/* Header for Bot */}
         {!isUser && (
           <div className="flex items-center justify-between gap-3 mb-2 pb-1.5 border-b border-zinc-800 text-xs">
-            <span className="font-semibold text-zinc-200 flex items-center gap-1.5">
-              {message.botName}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-zinc-200 flex items-center gap-1.5">
+                {message.botName}
+              </span>
+              {message.isLive && (
+                <span className="flex items-center gap-1 px-1.5 py-0.2 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 text-[10px] font-mono">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                  İŞLEMDE
+                </span>
+              )}
+            </div>
             <span className="text-[10px] text-zinc-400 font-mono">
               {new Date(message.timestamp).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })}
             </span>
           </div>
         )}
 
-        {/* Tool Execution Cards (if any) */}
+        {/* Live Status Bar (if working) */}
+        {message.isLive && message.currentStatus && (
+          <div className="flex items-center gap-2 mb-3 p-2 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs">
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" />
+            <span className="font-mono text-[11px] truncate">
+              {message.currentStatus}
+            </span>
+          </div>
+        )}
+
+        {/* Tool Execution Cards (Real-time and finished) */}
         {!isUser && message.toolEvents && message.toolEvents.length > 0 && (
           <div className="space-y-2 mb-3">
-            {message.toolEvents.filter(e => e.type === "tool_finish").map((event, idx) => (
-              <ToolCard key={idx} event={event} />
-            ))}
+            {message.toolEvents.map((event, idx) => {
+              if (event.type === "tool_finish") {
+                return <ToolCard key={idx} event={event} />;
+              } else if (event.type === "tool_start") {
+                const hasFinished = message.toolEvents.some(
+                  e => e.type === "tool_finish" && e.toolCallId === event.toolCallId
+                );
+                if (!hasFinished) {
+                  return <RunningToolCard key={idx} event={event} />;
+                }
+              }
+              return null;
+            })}
           </div>
         )}
 
@@ -84,11 +114,17 @@ export default function MessageItem({ message }) {
           </div>
         )}
 
-        {/* Message Text */}
-        <div 
-          className="prose prose-invert prose-sm max-w-none text-zinc-200 leading-normal break-words"
-          dangerouslySetInnerHTML={renderMarkdown(message.content)} 
-        />
+        {/* Message Text (if any content generated yet) */}
+        {message.content ? (
+          <div 
+            className="prose prose-invert prose-sm max-w-none text-zinc-200 leading-normal break-words"
+            dangerouslySetInnerHTML={renderMarkdown(message.content)} 
+          />
+        ) : message.isLive ? (
+          <div className="text-xs text-zinc-400 italic font-mono flex items-center gap-1.5">
+            <span>Kod yazılıyor ve adımlar icra ediliyor...</span>
+          </div>
+        ) : null}
 
         {/* User Timestamp */}
         {isUser && (
@@ -97,6 +133,29 @@ export default function MessageItem({ message }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function RunningToolCard({ event }) {
+  let cmdInfo = "";
+  try {
+    const parsed = JSON.parse(event.args || "{}");
+    cmdInfo = parsed.command || parsed.filePath || parsed.repoName || parsed.task || "";
+  } catch (e) {}
+
+  return (
+    <div className="rounded-lg bg-zinc-950 border border-indigo-500/40 p-2.5 text-xs font-mono text-zinc-300 flex items-center justify-between gap-2 shadow-sm animate-pulse">
+      <div className="flex items-center gap-2 truncate">
+        <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" />
+        <span className="font-semibold text-indigo-300 shrink-0">
+          {event.toolName === "execute_bash" ? "Bash:" : event.toolName}:
+        </span>
+        <span className="text-[11px] text-zinc-300 truncate">
+          {cmdInfo || event.args}
+        </span>
+      </div>
+      <span className="text-[10px] text-indigo-400 font-mono shrink-0">Yürütülüyor...</span>
     </div>
   );
 }
@@ -119,14 +178,16 @@ function ToolCard({ event }) {
 
   const getToolTitle = () => {
     switch (toolName) {
-      case "execute_bash": return `Bash Komutu: ${result.stdout ? "Tamamlandı" : "Çalıştırıldı"}`;
-      case "write_file": return `Dosya Yazıldı: ${result.filePath || ""}`;
-      case "read_file": return `Dosya Okundu: ${result.filePath || ""}`;
-      case "create_github_repo": return `GitHub Repo Oluşturuldu: ${result.repo || ""}`;
-      case "delegate_to_bot": return `Görev Devredildi: ${result.bot || ""}`;
+      case "execute_bash": return `Bash Komutu: ${result && result.stdout ? "Tamamlandı" : "Çalıştırıldı"}`;
+      case "write_file": return `Dosya Yazıldı: ${result ? result.filePath : ""}`;
+      case "read_file": return `Dosya Okundu: ${result ? result.filePath : ""}`;
+      case "create_github_repo": return `GitHub Repo Oluşturuldu: ${result ? result.repo : ""}`;
+      case "delegate_to_bot": return `Görev Devredildi: ${result ? result.bot : ""}`;
       default: return toolName;
     }
   };
+
+  if (!result) return null;
 
   return (
     <div className="rounded-lg bg-zinc-950 border border-zinc-800/90 text-xs overflow-hidden">

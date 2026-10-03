@@ -13,6 +13,7 @@ class Store {
       rooms: [...defaultRooms],
       messages: {} // targetId -> Array of messages
     };
+    this.activeTasks = {}; // targetId -> active task object
     this.init();
   }
 
@@ -120,6 +121,40 @@ class Store {
     this.state.messages[targetId].push(msg);
     this.save();
     return msg;
+  }
+
+  updateMessage(targetId, messageId, patch) {
+    if (!this.state.messages[targetId]) return null;
+    const idx = this.state.messages[targetId].findIndex(m => m.id === messageId);
+    if (idx >= 0) {
+      this.state.messages[targetId][idx] = {
+        ...this.state.messages[targetId][idx],
+        ...patch
+      };
+      this.save();
+      return this.state.messages[targetId][idx];
+    }
+    return null;
+  }
+
+  setActiveTask(targetId, taskData) {
+    if (!taskData) {
+      delete this.activeTasks[targetId];
+    } else {
+      this.activeTasks[targetId] = {
+        targetId,
+        updatedAt: new Date().toISOString(),
+        ...taskData
+      };
+    }
+  }
+
+  getActiveTask(targetId) {
+    return this.activeTasks[targetId] || null;
+  }
+
+  getAllActiveTasks() {
+    return this.activeTasks;
   }
 
   clearMessages(targetId) {

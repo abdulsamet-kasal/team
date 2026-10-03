@@ -16,6 +16,7 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeToolEvent, setActiveToolEvent] = useState(null);
   const [botStatuses, setBotStatuses] = useState({});
+  const [activeTasks, setActiveTasks] = useState({});
   const [terminalLogs, setTerminalLogs] = useState([]);
 
   // Modals
@@ -53,14 +54,21 @@ export default function App() {
 
   const fetchInitialData = async () => {
     try {
-      const [botsRes, roomsRes, settingsRes] = await Promise.all([
+      const [botsRes, roomsRes, settingsRes, activeTasksRes] = await Promise.all([
         fetch("/api/bots").then((r) => r.json()),
         fetch("/api/rooms").then((r) => r.json()),
-        fetch("/api/settings").then((r) => r.json())
+        fetch("/api/settings").then((r) => r.json()),
+        fetch("/api/tasks/active").then((r) => r.json()).catch(() => ({}))
       ]);
       setBots(botsRes);
       setRooms(roomsRes);
       setSettings(settingsRes);
+      if (activeTasksRes) {
+        setActiveTasks(activeTasksRes);
+        if (activeTasksRes[activeId]) {
+          setIsProcessing(true);
+        }
+      }
       if (roomsRes.length && !activeId) {
         setActiveId(roomsRes[0].id);
       }
@@ -103,16 +111,57 @@ export default function App() {
 
   const handleWsEvent = (data) => {
     switch (data.type) {
+      case "init":
+        if (data.activeTasks) {
+          setActiveTasks(data.activeTasks);
+          if (data.activeTasks[activeId]) {
+            setIsProcessing(true);
+          }
+        }
+        break;
+
+      case "active_task_updated":
+        setActiveTasks((prev) => {
+          if (!data.task) {
+            const next = { ...prev };
+            delete next[data.targetId];
+            return next;
+          }
+          return { ...prev, [data.targetId]: data.task };
+        });
+        if (data.targetId === activeId) {
+          setIsProcessing(!!data.task);
+        }
+        break;
+
+      case "message_updated":
+        if (data.targetId === activeId) {
+          setMessages((prev) => {
+            const idx = prev.findIndex((m) => m.id === data.message.id);
+            if (idx >= 0) {
+              const updated = [...prev];
+              updated[idx] = { ...updated[idx], ...data.message };
+              return updated;
+            }
+            return [...prev, data.message];
+          });
+        }
+        break;
+
       case "new_message":
         if (data.targetId === activeId) {
           setMessages((prev) => {
             const exists = prev.some((m) => m.id === data.message.id);
-            if (exists) return prev;
+            if (exists) {
+              return prev.map((m) => (m.id === data.message.id ? { ...m, ...data.message } : m));
+            }
             return [...prev, data.message];
           });
         }
-        setIsProcessing(false);
-        setActiveToolEvent(null);
+        if (!data.message.isLive) {
+          setIsProcessing(false);
+          setActiveToolEvent(null);
+        }
         break;
 
       case "emergency_stop":
@@ -298,6 +347,7 @@ export default function App() {
         onEmergencyStop={handleEmergencyStop}
         isProcessing={isProcessing}
         activeToolEvent={activeToolEvent}
+        activeTask={activeTasks[activeId]}
         allBots={bots}
       />
 
