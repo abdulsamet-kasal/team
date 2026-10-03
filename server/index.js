@@ -7,6 +7,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { store } from "./store.js";
 import { runAgentTurn } from "./agent.js";
 import { executeCommand } from "./executor.js";
+import { memoryManager } from "./memory.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -95,7 +96,34 @@ app.post("/api/rooms", (req, res) => {
   res.json(saved);
 });
 
-// 4. Messages
+// 4. Memory & Rules API
+app.get("/api/memory", (req, res) => {
+  res.json({
+    rules: memoryManager.rules,
+    facts: memoryManager.facts
+  });
+});
+
+app.post("/api/memory", (req, res) => {
+  const { type, content } = req.body;
+  if (!content) return res.status(400).json({ error: "İçerik gereklidir." });
+  if (type === "rule") {
+    memoryManager.addRule(content);
+  } else {
+    memoryManager.addFact(content);
+  }
+  broadcast({ type: "memory_updated", rules: memoryManager.rules, facts: memoryManager.facts });
+  res.json({ rules: memoryManager.rules, facts: memoryManager.facts });
+});
+
+app.delete("/api/memory/:type/:index", (req, res) => {
+  const { type, index } = req.params;
+  memoryManager.deleteItem(type, parseInt(index, 10));
+  broadcast({ type: "memory_updated", rules: memoryManager.rules, facts: memoryManager.facts });
+  res.json({ rules: memoryManager.rules, facts: memoryManager.facts });
+});
+
+// 5. Messages
 app.get("/api/messages/:targetId", (req, res) => {
   res.json(store.getMessages(req.params.targetId));
 });
@@ -105,60 +133,69 @@ app.delete("/api/messages/:targetId", (req, res) => {
   res.json({ success: true });
 });
 
-// 5. Chat & Execution Trigger
+// 6. Chat & Autonomous Multi-Bot Execution Trigger
 app.post("/api/chat", async (req, res) => {
-  const { targetId, content } = req.body;
-  if (!targetId || !content) {
-    return res.status(400).json({ error: "targetId ve content gereklidir." });
+  const { targetId, content, images } = req.body;
+  if (!targetId || (!content && (!images || !images.length))) {
+    return res.status(400).json({ error: "targetId ve en az bir mesaj veya görsel gereklidir." });
   }
 
   // 1. Kullanıcı mesajını kaydet ve yayınla
   const userMsg = store.addMessage(targetId, {
     role: "user",
-    content
+    content: content || "",
+    images: images || []
   });
   broadcast({ type: "new_message", targetId, message: userMsg });
 
-  // Response hemen döner, arka planda ajan çalışır ve WebSocket ile stream edilir
+  // İstemciye hemen yanıt dön (WebSocket ile canlı akış sağlanır)
   res.json({ status: "processing", messageId: userMsg.id });
 
-  // Ajanın çalıştırılması
   const isRoom = targetId.startsWith("room-");
   const room = isRoom ? store.getRoom(targetId) : null;
   const bot = !isRoom ? store.getBot(targetId) : null;
+  const allBots = store.getBots();
 
-  const targetBots = [];
+  // İlk tetiklenecek bot(lar)ı belirle
+  const botQueue = [];
+
   if (isRoom) {
-    // Oda mesajı: @mention kontrolü
-    const lowerContent = content.toLowerCase();
-    const allBots = store.getBots();
-    
+    const lowerContent = (content || "").toLowerCase();
     if (lowerContent.includes("@everyone") || lowerContent.includes("@hepsi") || lowerContent.includes("@ekip")) {
-      targetBots.push(...allBots.filter(b => room.memberBotIds.includes(b.id)));
+      botQueue.push(...allBots.filter(b => room.memberBotIds.includes(b.id)));
     } else {
       for (const b of allBots) {
-        if (room.memberBotIds.includes(b.id) && (lowerContent.includes(`@${b.name.toLowerCase()}`) || lowerContent.includes(`@${b.role}`))) {
-          targetBots.push(b);
+        if (room.memberBotIds.includes(b.id) && (lowerContent.includes(`@${b.name.toLowerCase()}`) || lowerContent.includes(`@${b.role.toLowerCase()}`))) {
+          botQueue.push(b);
         }
       }
-      // Eğer kimse etiketlenmediyse varsayılan olarak Tech Lead yanıt verir
-      if (!targetBots.length) {
+      // Kimse etiketlenmediyse varsayılan olarak Tech Lead başlatır
+      if (!botQueue.length) {
         const lead = allBots.find(b => b.isChief || b.id === "bot-lead") || allBots[0];
-        if (lead) targetBots.push(lead);
+        if (lead) botQueue.push(lead);
       }
     }
   } else if (bot) {
-    targetBots.push(bot);
+    botQueue.push(bot);
   }
 
-  // Her hedef bot için sırayla çalıştır
-  for (const respondingBot of targetBots) {
+  // Otonom Çoklu Bot Döngüsü (En fazla 6 adım zincir)
+  let rounds = 0;
+  const maxRounds = isRoom ? 6 : 1;
+  const executedInChain = new Set();
+
+  while (botQueue.length > 0 && rounds < maxRounds) {
+    const respondingBot = botQueue.shift();
+    rounds++;
+    executedInChain.add(respondingBot.id);
+
     broadcast({ type: "bot_status", botId: respondingBot.id, status: "thinking", targetId });
 
     try {
       const history = store.getMessages(targetId).map(m => ({
         role: m.role,
-        content: m.content
+        content: m.content,
+        images: m.images
       }));
 
       let accumulatedToolEvents = [];
@@ -188,6 +225,22 @@ app.post("/api/chat", async (req, res) => {
       });
 
       broadcast({ type: "new_message", targetId, message: botMsg });
+
+      // Otonom Takım İletişimi: Bot yanıtında başka bir ekip arkadaşını etiketlediyse zincire ekle
+      if (isRoom && rounds < maxRounds) {
+        const lowerReply = reply.toLowerCase();
+        for (const candidate of allBots) {
+          if (
+            room.memberBotIds.includes(candidate.id) &&
+            candidate.id !== respondingBot.id &&
+            !botQueue.some(b => b.id === candidate.id) &&
+            (lowerReply.includes(`@${candidate.name.toLowerCase()}`) || lowerReply.includes(`@${candidate.role.toLowerCase()}`))
+          ) {
+            // İlgili botu sıradaki konuşmacı olarak ekle
+            botQueue.push(candidate);
+          }
+        }
+      }
     } catch (err) {
       console.error("Chat turn error:", err);
       const errorMsg = store.addMessage(targetId, {

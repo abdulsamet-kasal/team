@@ -67,6 +67,23 @@ export default function MessageItem({ message }) {
           </div>
         )}
 
+        {/* Attached Images */}
+        {message.images && message.images.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2.5">
+            {message.images.map((img, idx) => (
+              <a
+                key={idx}
+                href={img}
+                target="_blank"
+                rel="noreferrer"
+                className="block overflow-hidden rounded-lg border border-zinc-700/80 max-w-[280px] max-h-56 hover:opacity-90 transition-opacity"
+              >
+                <img src={img} alt="eklenen görsel" className="w-full h-full object-cover" />
+              </a>
+            ))}
+          </div>
+        )}
+
         {/* Message Text */}
         <div 
           className="prose prose-invert prose-sm max-w-none text-zinc-200 leading-normal break-words"

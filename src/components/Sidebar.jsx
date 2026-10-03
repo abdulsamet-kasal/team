@@ -7,7 +7,8 @@ import {
   FolderGit2, 
   CheckCircle2, 
   Sparkles,
-  Bot
+  Bot,
+  Brain
 } from "lucide-react";
 
 export default function Sidebar({ 
@@ -16,6 +17,8 @@ export default function Sidebar({
   activeId, 
   onSelect, 
   onOpenNewBot, 
+  onOpenRoomModal,
+  onOpenMemory,
   onOpenSettings, 
   onOpenTerminal,
   botStatuses = {}
@@ -54,13 +57,22 @@ export default function Sidebar({
           </div>
         </div>
 
-        <button 
-          onClick={onOpenSettings}
-          title="Ayarlar"
-          className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
-        >
-          <Settings className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button 
+            onClick={onOpenMemory}
+            title="Kalıcı Hafıza & 7 Kural (MEMORY.md)"
+            className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-indigo-400 transition-colors"
+          >
+            <Brain className="w-4 h-4" />
+          </button>
+          <button 
+            onClick={onOpenSettings}
+            title="Ayarlar"
+            className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {/* Navigation List */}
@@ -68,7 +80,14 @@ export default function Sidebar({
         {/* Rooms Section */}
         <div>
           <div className="flex items-center justify-between px-2 mb-1.5 text-[11px] font-semibold tracking-wider text-zinc-400 uppercase">
-            <span>Ortak Çalışma Odası</span>
+            <span>Çalışma Odaları ({rooms.length})</span>
+            <button
+              onClick={onOpenRoomModal}
+              title="Yeni Ekip / Oda Oluştur"
+              className="p-0.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
           </div>
           <div className="space-y-1">
             {rooms.map((room) => {

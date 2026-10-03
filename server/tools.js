@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { executeCommand } from "./executor.js";
 import { store } from "./store.js";
+import { memoryManager } from "./memory.js";
 
 export const toolDefinitions = [
   {
@@ -120,6 +121,39 @@ export const toolDefinitions = [
         required: ["targetBotId", "task"]
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "save_memory",
+      description: "Kalıcı hafızaya ve proje bilgisine yeni bir önemli kural veya bilgi kaydeder (MEMORY.md).",
+      parameters: {
+        type: "object",
+        properties: {
+          type: {
+            type: "string",
+            enum: ["rule", "fact"],
+            description: "Kaydedilecek öğenin türü: 'rule' (kural) veya 'fact' (proje bilgisi/hafıza)."
+          },
+          content: {
+            type: "string",
+            description: "Hafızaya eklenecek bilgi veya kural metni."
+          }
+        },
+        required: ["type", "content"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_memory",
+      description: "Sistemde kayıtlı kalıcı hafızayı ve 7 sabit çalışma kuralını okur.",
+      parameters: {
+        type: "object",
+        properties: {}
+      }
+    }
   }
 ];
 
@@ -225,6 +259,31 @@ export async function executeToolCall(toolCall, { cwd, onOutput, runSubagent } =
         bot: targetBot.name,
         result: subResult
       };
+    }
+
+    case "save_memory": {
+      try {
+        if (args.type === "rule") {
+          memoryManager.addRule(args.content);
+          return { success: true, message: `Yeni kural kalıcı hafızaya eklendi: "${args.content}"` };
+        } else {
+          memoryManager.addFact(args.content);
+          return { success: true, message: `Yeni proje hafızası kaydedildi: "${args.content}"` };
+        }
+      } catch (err) {
+        return { error: `Hafıza kaydetme hatası: ${err.message}` };
+      }
+    }
+
+    case "read_memory": {
+      try {
+        return {
+          rules: memoryManager.rules,
+          facts: memoryManager.facts
+        };
+      } catch (err) {
+        return { error: `Hafıza okuma hatası: ${err.message}` };
+      }
     }
 
     default:

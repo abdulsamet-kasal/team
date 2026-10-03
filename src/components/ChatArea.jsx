@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import MessageItem from "./MessageItem";
-import { Send, Trash2, Sparkles, Loader2, AtSign } from "lucide-react";
+import { Send, Trash2, Sparkles, Loader2, AtSign, Image as ImageIcon, X } from "lucide-react";
 
 export default function ChatArea({ 
   target, 
@@ -12,8 +12,10 @@ export default function ChatArea({
   allBots = []
 }) {
   const [input, setInput] = useState("");
+  const [selectedImages, setSelectedImages] = useState([]);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -31,9 +33,10 @@ export default function ChatArea({
   };
 
   const handleSend = () => {
-    if (!input.trim() || isProcessing) return;
-    onSendMessage(input.trim());
+    if ((!input.trim() && selectedImages.length === 0) || isProcessing) return;
+    onSendMessage(input.trim(), selectedImages);
     setInput("");
+    setSelectedImages([]);
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
@@ -48,6 +51,45 @@ export default function ChatArea({
   const insertMention = (mention) => {
     setInput((prev) => (prev ? `${prev} ${mention} ` : `${mention} `));
     textareaRef.current?.focus();
+  };
+
+  // Clipboard Paste Support (Images)
+  const handlePaste = (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf("image") !== -1) {
+        e.preventDefault();
+        const file = items[i].getAsFile();
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = (uploadEvent) => {
+            setSelectedImages((prev) => [...prev, uploadEvent.target.result]);
+          };
+          reader.readAsDataURL(file);
+        }
+      }
+    }
+  };
+
+  // File Input Select Support
+  const handleFileChange = (e) => {
+    const files = Array.from(e.target.files || []);
+    for (const file of files) {
+      if (file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = (uploadEvent) => {
+          setSelectedImages((prev) => [...prev, uploadEvent.target.result]);
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+    e.target.value = "";
+  };
+
+  const removeImage = (index) => {
+    setSelectedImages((prev) => prev.filter((_, idx) => idx !== index));
   };
 
   if (!target) {
@@ -157,16 +199,59 @@ export default function ChatArea({
           </div>
         )}
 
+        {/* Selected Images Preview Strip */}
+        {selectedImages.length > 0 && (
+          <div className="flex items-center gap-2.5 mb-2.5 p-2 bg-zinc-900/80 rounded-xl border border-zinc-800 overflow-x-auto">
+            <span className="text-[10px] text-zinc-400 uppercase font-semibold px-1">
+              Görseller ({selectedImages.length}):
+            </span>
+            {selectedImages.map((img, idx) => (
+              <div key={idx} className="relative group shrink-0">
+                <img
+                  src={img}
+                  alt="eklenti"
+                  className="w-14 h-14 object-cover rounded-lg border border-zinc-700 shadow-sm"
+                />
+                <button
+                  onClick={() => removeImage(idx)}
+                  className="absolute -top-1.5 -right-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-full p-0.5 shadow-md transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="flex items-end gap-2 bg-zinc-900 border border-zinc-800 focus-within:border-indigo-500/70 rounded-xl p-2 transition-all shadow-inner">
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            accept="image/*"
+            multiple
+            className="hidden"
+          />
+
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            title="Görsel Yükle (veya doğrudan yapıştır)"
+            className="p-2 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors shrink-0"
+          >
+            <ImageIcon className="w-4 h-4" />
+          </button>
+
           <textarea
             ref={textareaRef}
             rows={1}
             value={input}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder={
               isRoom 
-                ? "Tüm ekibe veya belirli bir uzmana görev yazın... (Enter: Gönder, Shift+Enter: Yeni Satır)" 
+                ? "Tüm ekibe veya belirli bir uzmana görev yazın... (Görsel yapıştırabilirsiniz)" 
                 : `${target.name}'a mesaj veya görev yazın...`
             }
             className="flex-1 bg-transparent text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none max-h-44 px-2 py-1 leading-normal"
@@ -174,9 +259,9 @@ export default function ChatArea({
 
           <button
             onClick={handleSend}
-            disabled={!input.trim() || isProcessing}
+            disabled={(!input.trim() && selectedImages.length === 0) || isProcessing}
             className={`p-2.5 rounded-lg flex items-center justify-center transition-all ${
-              input.trim() && !isProcessing
+              (input.trim() || selectedImages.length > 0) && !isProcessing
                 ? "bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/20"
                 : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
             }`}
