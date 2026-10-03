@@ -1,0 +1,76 @@
+:root {
+  /* Koyu Tema (Varsayılan) - Dark Developer Command Center */
+  --bg-base: #09090b;
+  --bg-surface: #111115;
+  --bg-surface-elevated: #18181f;
+  --bg-surface-hover: #22222b;
+  --bg-surface-active: #2b2b36;
+
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-default: rgba(255, 255, 255, 0.12);
+  --border-strong: rgba(255, 255, 255, 0.22);
+  --border-focus: #8b5cf6;
+
+  --text-primary: #f4f4f6;
+  --text-secondary: #a1a1aa;
+  --text-tertiary: #71717a;
+  --text-muted: #52525b;
+
+  --accent-purple: #8b5cf6;
+  --accent-purple-hover: #7c3aed;
+  --accent-purple-light: #a78bfa;
+  --accent-purple-subtle: rgba(139, 92, 246, 0.12);
+  --accent-purple-border: rgba(139, 92, 246, 0.3);
+
+  --status-idle: #71717a;
+  --status-thinking: #38bdf8;
+  --status-working: #f59e0b;
+  --status-success: #10b981;
+  --status-error: #ef4444;
+
+  --code-bg: #0d0e12;
+  --terminal-bg: #090a0f;
+
+  --shadow-subtle: 0 1px 2px 0 rgba(0, 0, 0, 0.35);
+  --shadow-elevated: 0 10px 25px -5px rgba(0, 0, 0, 0.6), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+}
+
+[data-theme="light"] {
+  /* Açık Tema - Clean Developer Minimalist */
+  --bg-base: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-surface-elevated: #f1f5f9;
+  --bg-surface-hover: #e2e8f0;
+  --bg-surface-active: #cbd5e1;
+
+  --border-subtle: rgba(0, 0, 0, 0.06);
+  --border-default: rgba(0, 0, 0, 0.12);
+  --border-strong: rgba(0, 0, 0, 0.22);
+  --border-focus: #7c3aed;
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-tertiary: #64748b;
+  --text-muted: #94a3b8;
+
+  --accent-purple: #7c3aed;
+  --accent-purple-hover: #6d28d9;
+  --accent-purple-light: #8b5cf6;
+  --accent-purple-subtle: rgba(124, 58, 237, 0.08);
+  --accent-purple-border: rgba(124, 58, 237, 0.25);
+
+  --status-idle: #94a3b8;
+  --status-thinking: #0284c7;
+  --status-working: #d97706;
+  --status-success: #059669;
+  --status-error: #dc2626;
+
+  --code-bg: #f8fafc;
+  --terminal-bg: #0f172a;
+
+  --shadow-subtle: 0 1px 3px 0 rgba(0, 0, 0, 0.08);
+  --shadow-elevated: 0 10px 25px -5px rgba(0, 0, 0, 0.12), 0 8px 10px -6px rgba(0, 0, 0, 0.08);
+}

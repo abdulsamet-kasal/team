@@ -25,6 +25,58 @@ export function truncateOutput(str, maxChars = 30000) {
   return `${head}\n\n... [⚠️ ÇIKTI ÇOK UZUN OLDUĞU İÇİN ORTA KISIM KIRPILDI (${truncatedCount.toLocaleString()} karakter) ...] \n\n${tail}`;
 }
 
+export function isDangerousCommand(cmd) {
+  if (!cmd || typeof cmd !== "string") return false;
+  const dangerousPatterns = [
+    /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f?|-rf|-fr)\s+(\/|~|\$HOME|\.\.|\*)/i,
+    /\bsudo\b/i,
+    /\bmkfs\b/i,
+    /\bdd\s+if=/i,
+    />\s*\/dev\/sd/i,
+    /:\(\)\s*\{\s*:\|:&\s*\};:/, // fork bomb
+    /\bgit\s+push\b.*(--force|-f)\b/i,
+    /\bgit\s+reset\s+--hard\b/i,
+    /\bchmod\s+(-R\s+)?777\s+\//i,
+    /\bchown\s+(-R\s+)?root/i
+  ];
+  return dangerousPatterns.some(pattern => pattern.test(cmd));
+}
+
+export async function createGitCheckpoint(cwd, message = "Otomatik Checkpoint") {
+  try {
+    const status = await executeCommand("git status --porcelain", { cwd, timeoutMs: 10000 });
+    const head = await executeCommand("git rev-parse --short HEAD", { cwd, timeoutMs: 10000 });
+    const shortHead = head.stdout ? head.stdout.trim() : "init";
+
+    if (!status.stdout || !status.stdout.trim()) {
+      return { created: false, commitHash: shortHead, message: "Değişiklik yok (Temiz Durum)" };
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const commitMsg = `checkpoint: [${timestamp}] ${message}`;
+    await executeCommand("git add -A", { cwd, timeoutMs: 10000 });
+    await executeCommand(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`, { cwd, timeoutMs: 10000 });
+    const newHead = await executeCommand("git rev-parse --short HEAD", { cwd, timeoutMs: 10000 });
+    return { created: true, commitHash: newHead.stdout ? newHead.stdout.trim() : shortHead, message: commitMsg };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+export async function rollbackGitCheckpoint(cwd, commitHash) {
+  try {
+    if (commitHash) {
+      const res = await executeCommand(`git reset --hard ${commitHash}`, { cwd, timeoutMs: 15000 });
+      return { success: res.exitCode === 0, commitHash, stdout: res.stdout, stderr: res.stderr };
+    } else {
+      const res = await executeCommand("git reset --hard HEAD~1", { cwd, timeoutMs: 15000 });
+      return { success: res.exitCode === 0, stdout: res.stdout, stderr: res.stderr };
+    }
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
 export function executeCommand(command, { cwd, onOutput, timeoutMs = 120000 } = {}) {
   return new Promise((resolve) => {
     const startTime = Date.now();

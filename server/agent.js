@@ -1,6 +1,7 @@
 import { store } from "./store.js";
 import { toolDefinitions, executeToolCall } from "./tools.js";
 import { memoryManager } from "./memory.js";
+import { isDangerousCommand } from "./executor.js";
 
 // Token Tasarrufu & Sıkıştırma: Geçmişteki eski araç sonuçlarını damıt
 function compactToolHistory(messages) {
@@ -168,12 +169,16 @@ export async function runAgentTurn(botId, history = [], { targetId, onChunk, onT
       return { reply: "🛑 İşlem acilen durduruldu.", aborted: true, isGoalCompleted: false };
     }
 
+    const reqHeaders = {
+      "Content-Type": "application/json"
+    };
+    if (apiKey) {
+      reqHeaders["Authorization"] = `Bearer ${apiKey}`;
+    }
+
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`
-      },
+      headers: reqHeaders,
       body: JSON.stringify(requestBody),
       signal: abortSignal
     });
@@ -184,6 +189,14 @@ export async function runAgentTurn(botId, history = [], { targetId, onChunk, onT
     }
 
     const data = await response.json();
+    if (data.usage) {
+      store.recordTokenUsage(bot.id, data.usage.prompt_tokens || 0, data.usage.completion_tokens || 0);
+    } else {
+      const promptEstimate = Math.ceil(totalChars / 4);
+      const completionEstimate = Math.ceil(((data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "").length / 4);
+      store.recordTokenUsage(bot.id, promptEstimate, completionEstimate);
+    }
+
     const choice = data.choices && data.choices[0];
     if (!choice || !choice.message) {
       throw new Error("Modelden geçerli bir yanıt alınamadı.");
@@ -201,6 +214,16 @@ export async function runAgentTurn(botId, history = [], { targetId, onChunk, onT
           return { reply: "🛑 İşlem acilen durduruldu.", aborted: true, isGoalCompleted: false };
         }
 
+        let isDangerous = false;
+        if (toolCall.function.name === "execute_bash") {
+          try {
+            const parsed = JSON.parse(toolCall.function.arguments || "{}");
+            if (parsed.command && isDangerousCommand(parsed.command)) {
+              isDangerous = true;
+            }
+          } catch (e) {}
+        }
+
         if (onToolEvent) {
           onToolEvent({
             type: "tool_start",
@@ -208,7 +231,8 @@ export async function runAgentTurn(botId, history = [], { targetId, onChunk, onT
             botName: bot.name,
             toolCallId: toolCall.id,
             toolName: toolCall.function.name,
-            args: toolCall.function.arguments
+            args: toolCall.function.arguments,
+            isDangerous
           });
         }
 
@@ -231,7 +255,8 @@ export async function runAgentTurn(botId, history = [], { targetId, onChunk, onT
               onToolEvent({
                 type: "tool_stream",
                 toolCallId: toolCall.id,
-                chunk
+                chunk,
+                isDangerous
               });
             }
           },
@@ -247,7 +272,8 @@ export async function runAgentTurn(botId, history = [], { targetId, onChunk, onT
             type: "tool_finish",
             toolCallId: toolCall.id,
             toolName: toolCall.function.name,
-            result
+            result,
+            isDangerous
           });
         }
 

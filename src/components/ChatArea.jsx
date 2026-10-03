@@ -1,50 +1,74 @@
 import React, { useState, useRef, useEffect } from "react";
 import MessageItem from "./MessageItem";
-import { 
-  Send, 
-  Trash2, 
-  Sparkles, 
-  Loader2, 
-  AtSign, 
-  Image as ImageIcon, 
-  X, 
-  Target, 
-  Octagon, 
-  ShieldAlert,
+import {
+  Send,
+  Trash2,
+  Sparkles,
+  Loader2,
+  AtSign,
+  Image as ImageIcon,
+  X,
+  Target,
+  Octagon,
   Copy,
   Check,
   Menu,
   Plus,
   Zap,
   ChevronDown,
-  Layers
+  Layers,
+  Search,
+  Download,
+  Sidebar as SidebarIcon,
+  Brain,
+  MessageSquareQuote,
+  SlidersHorizontal
 } from "lucide-react";
+import Avatar from "./ui/Avatar";
+import Badge from "./ui/Badge";
+import Button from "./ui/Button";
+import Popover from "./ui/Popover";
+import ModelSelector from "./ModelSelector";
 
-export default function ChatArea({ 
-  target, 
-  messages = [], 
-  onSendMessage, 
+export default function ChatArea({
+  target,
+  messages = [],
+  onSendMessage,
   onClearChat,
   onEmergencyStop,
+  onRollback,
   isProcessing = false,
   activeToolEvent = null,
   activeTask = null,
   lastActivity = null,
   allBots = [],
-  // Sessions & Responsive
   sessions = [],
   activeSessionId = null,
   onCreateSession,
   onSwitchSession,
   onCompactSession,
   onDeleteSession,
-  onToggleSidebar
+  onToggleSidebar,
+  onToggleRightPanel,
+  isRightPanelOpen = false,
+  onExportMarkdown,
+  settings = {},
+  onModelSelect,
+  onProviderSwitch,
+  onOpenSettings
 }) {
   const [input, setInput] = useState("");
   const [selectedImages, setSelectedImages] = useState([]);
   const [goalMode, setGoalMode] = useState(false);
-  const [copiedCmd, setCopiedCmd] = useState(false);
   const [isSessionDropdownOpen, setIsSessionDropdownOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [quotedMessage, setQuotedMessage] = useState(null);
+
+  // @mention autocomplete state
+  const [mentionQuery, setMentionQuery] = useState(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -59,7 +83,31 @@ export default function ChatArea({
     scrollToBottom();
   }, [messages, isProcessing, activeToolEvent]);
 
+  // Handle textarea enter & shortcuts
   const handleKeyDown = (e) => {
+    // If mention suggestions open, handle arrows and enter
+    if (mentionQuery !== null && filteredMentions.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setMentionIndex((prev) => (prev + 1) % filteredMentions.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setMentionIndex((prev) => (prev - 1 + filteredMentions.length) % filteredMentions.length);
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        selectMention(filteredMentions[mentionIndex]);
+        return;
+      }
+      if (e.key === "Escape") {
+        setMentionQuery(null);
+        return;
+      }
+    }
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -68,23 +116,64 @@ export default function ChatArea({
 
   const handleSend = () => {
     if ((!input.trim() && selectedImages.length === 0) || isProcessing) return;
-    onSendMessage(input.trim(), selectedImages, goalMode);
+
+    let finalContent = input.trim();
+    if (quotedMessage) {
+      finalContent = `> [${quotedMessage.botName || "Kullanıcı"}]: ${quotedMessage.content ? quotedMessage.content.slice(0, 140) : "İşlem"}\n\n${finalContent}`;
+    }
+
+    onSendMessage(finalContent, selectedImages, goalMode);
     setInput("");
     setSelectedImages([]);
+    setQuotedMessage(null);
+    setMentionQuery(null);
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
   };
 
+  // Autoresize textarea & track mention trigger (@)
   const handleInput = (e) => {
-    setInput(e.target.value);
+    const val = e.target.value;
+    setInput(val);
     e.target.style.height = "auto";
     e.target.style.height = `${Math.min(e.target.scrollHeight, 180)}px`;
+
+    // Track @mention
+    const cursor = e.target.selectionStart;
+    const textBefore = val.slice(0, cursor);
+    const lastAt = textBefore.lastIndexOf("@");
+    if (lastAt !== -1 && !/\s/.test(textBefore.slice(lastAt + 1))) {
+      setMentionQuery(textBefore.slice(lastAt + 1).toLowerCase());
+      setMentionIndex(0);
+    } else {
+      setMentionQuery(null);
+    }
   };
 
-  const insertMention = (mention) => {
-    setInput((prev) => (prev ? `${prev} ${mention} ` : `${mention} `));
-    textareaRef.current?.focus();
+  // Mention suggestions list
+  const mentionCandidates = [
+    { id: "everyone", name: "everyone", role: "Tüm Ekip", avatar: "👥" },
+    ...allBots.map((b) => ({ id: b.id, name: b.name, role: b.role, avatar: b.avatar }))
+  ];
+
+  const filteredMentions = mentionCandidates.filter(
+    (m) =>
+      mentionQuery !== null &&
+      (m.name.toLowerCase().includes(mentionQuery) || m.role.toLowerCase().includes(mentionQuery))
+  );
+
+  const selectMention = (candidate) => {
+    if (!textareaRef.current) return;
+    const cursor = textareaRef.current.selectionStart;
+    const textBefore = input.slice(0, cursor);
+    const lastAt = textBefore.lastIndexOf("@");
+    const newText = input.slice(0, lastAt) + `@${candidate.name} ` + input.slice(cursor);
+    setInput(newText);
+    setMentionQuery(null);
+    setTimeout(() => {
+      textareaRef.current?.focus();
+    }, 10);
   };
 
   // Clipboard Paste Support (Images)
@@ -128,449 +217,423 @@ export default function ChatArea({
 
   if (!target) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center p-6 text-zinc-500">
-        <Sparkles className="w-12 h-12 mb-3 text-zinc-700 animate-pulse" />
-        <p className="text-sm">Sohbet etmek için soldan bir bot veya oda seçin.</p>
+      <div className="flex-1 flex flex-col items-center justify-center p-6 text-[var(--text-tertiary)] bg-[var(--bg-base)]">
+        <Sparkles className="w-12 h-12 mb-3 text-purple-400 animate-pulse" />
+        <p className="text-sm font-medium text-[var(--text-secondary)]">
+          Sohbet etmek için soldan bir bot veya oda seçin.
+        </p>
       </div>
     );
   }
 
   const isRoom = target.id.startsWith("room-");
+  const memberBots = isRoom
+    ? allBots.filter((b) => (target.memberBotIds || []).includes(b.id))
+    : [target];
+
+  // Mesajları arama terimine göre filtrele
+  const filteredMessages = searchQuery.trim()
+    ? messages.filter((m) =>
+        (m.content || "").toLowerCase().includes(searchQuery.toLowerCase().trim())
+      )
+    : messages;
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-zinc-950 overflow-hidden relative">
-      {/* Chat Header */}
-      <div className="h-14 px-3 sm:px-5 border-b border-zinc-800/80 bg-zinc-900/40 backdrop-blur-sm flex items-center justify-between shrink-0 gap-2">
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          {/* Mobile Hamburger Menu Toggle */}
+    <div className="flex-1 flex flex-col h-full bg-[var(--bg-base)] overflow-hidden relative">
+      {/* 1. İNCE, TEK SATIRLIK ÜST BAR (3 eski şeridin yerini alan rafine bar) */}
+      <header className="h-13 px-3 sm:px-4 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)] backdrop-blur-md flex items-center justify-between shrink-0 gap-2 z-20">
+        {/* Sol Grup: Hamburger + Oda/Bot Bilgisi + Üye Avatarları + Canlı Durum */}
+        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+          {/* Mobile Sidebar Hamburger Toggle */}
           <button
+            type="button"
             onClick={onToggleSidebar}
-            title="Ekip / Odalar Menüsünü Aç"
-            className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-white md:hidden transition-colors shrink-0"
+            title="Ekip / Odalar Menüsü"
+            className="p-1.5 rounded-lg hover:bg-[var(--bg-surface-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] md:hidden transition-colors shrink-0 cursor-pointer"
           >
-            <Menu className="w-5 h-5" />
+            <Menu className="w-4 h-4" />
           </button>
 
-          <div className="w-9 h-9 rounded-lg bg-zinc-800 border border-zinc-700/80 flex items-center justify-center text-lg shrink-0">
+          {/* Hedef Avatar */}
+          <div className="w-8 h-8 rounded-lg bg-[var(--bg-surface-elevated)] border border-[var(--border-default)] flex items-center justify-center text-base shrink-0 shadow-xs">
             {target.avatar || "🤖"}
           </div>
 
-          <div className="min-w-0">
-            <h2 className="font-semibold text-sm text-zinc-100 truncate flex items-center gap-2">
+          {/* İsim ve Oturum Seçici */}
+          <div className="min-w-0 flex items-center gap-1.5 sm:gap-2">
+            <h2 className="font-semibold text-xs text-[var(--text-primary)] truncate max-w-[80px] xs:max-w-[130px] sm:max-w-none">
               {target.name}
-              {target.isChief && (
-                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 hidden sm:inline">
-                  LEAD
-                </span>
-              )}
             </h2>
-            <p className="text-xs text-zinc-400 truncate max-w-xs sm:max-w-md hidden sm:block">
-              {target.title || target.description}
-            </p>
+
+            {/* Sessions Dropdown */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsSessionDropdownOpen(!isSessionDropdownOpen)}
+                className="flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded-md bg-[var(--bg-surface-elevated)] hover:bg-[var(--bg-surface-hover)] text-[11px] font-mono text-[var(--text-secondary)] border border-[var(--border-subtle)] transition-colors cursor-pointer"
+                title="Sohbet Oturumları"
+              >
+                <Layers className="w-3 h-3 text-purple-400 shrink-0" />
+                <span className="max-w-[55px] xs:max-w-[80px] sm:max-w-[120px] truncate">
+                  {activeSession?.title || "Ana Sohbet"}
+                </span>
+                <ChevronDown className="w-2.5 h-2.5 text-[var(--text-tertiary)] shrink-0" />
+              </button>
+
+              {isSessionDropdownOpen && (
+                <div className="absolute top-full left-0 mt-1.5 w-60 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl shadow-2xl z-50 p-2 space-y-1 backdrop-blur-xl animate-in fade-in duration-100">
+                  <div className="flex items-center justify-between px-2 py-1 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase border-b border-[var(--border-subtle)] mb-1">
+                    <span>Oturumlar ({sessions.length})</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onCreateSession?.();
+                        setIsSessionDropdownOpen(false);
+                      }}
+                      className="text-purple-400 hover:text-purple-300 flex items-center gap-0.5 text-[10px] font-medium cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3" /> Yeni
+                    </button>
+                  </div>
+                  <div className="max-h-52 overflow-y-auto space-y-0.5">
+                    {sessions.map((s) => {
+                      const isCur = s.id === activeSessionId;
+                      return (
+                        <div
+                          key={s.id}
+                          className={`flex items-center justify-between px-2 py-1.5 rounded-lg text-xs cursor-pointer transition-colors group ${
+                            isCur
+                              ? "bg-purple-600/20 text-purple-300 font-medium"
+                              : "text-[var(--text-secondary)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text-primary)]"
+                          }`}
+                          onClick={() => {
+                            onSwitchSession?.(s.id);
+                            setIsSessionDropdownOpen(false);
+                          }}
+                        >
+                          <div className="flex items-center gap-1.5 truncate">
+                            <span>{s.summary ? "⚡" : "💬"}</span>
+                            <span className="truncate">{s.title}</span>
+                          </div>
+                          {sessions.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (window.confirm(`"${s.title}" oturumunu silmek istediğinize emin misiniz?`)) {
+                                  onDeleteSession?.(s.id);
+                                }
+                              }}
+                              className="opacity-0 group-hover:opacity-100 p-0.5 text-[var(--text-tertiary)] hover:text-rose-400 transition-opacity"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Sessions Dropdown Selector */}
-          <div className="relative ml-1 sm:ml-2">
-            <button
-              onClick={() => setIsSessionDropdownOpen((prev) => !prev)}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-zinc-800/80 hover:bg-zinc-800 text-xs font-medium text-zinc-300 border border-zinc-700/60 transition-colors"
-              title="Sohbet Oturumları"
-            >
-              <Layers className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-              <span className="max-w-[80px] sm:max-w-[130px] truncate">{activeSession?.title || "Ana Sohbet"}</span>
-              {activeSession?.summary && <span title="Sıkıştırılmış Hafıza Aktif" className="text-amber-400">⚡</span>}
-              <ChevronDown className="w-3 h-3 text-zinc-400 shrink-0" />
-            </button>
+          {/* Model & Provider Selector */}
+          <div className="flex items-center ml-0.5 sm:ml-1 shrink-0">
+            <ModelSelector
+              settings={settings}
+              currentTarget={target}
+              allBots={allBots}
+              onModelSelect={onModelSelect}
+              onProviderSwitch={onProviderSwitch}
+              onOpenSettings={onOpenSettings}
+            />
+          </div>
 
-            {isSessionDropdownOpen && (
-              <div className="absolute top-full left-0 mt-1.5 w-64 bg-zinc-900 border border-zinc-700/90 rounded-xl shadow-2xl z-50 p-2 space-y-1 backdrop-blur-md">
-                <div className="flex items-center justify-between px-2 py-1 text-[11px] font-semibold text-zinc-400 uppercase border-b border-zinc-800 mb-1">
-                  <span>Sohbetler ({sessions.length})</span>
-                  <button
-                    onClick={() => {
-                      if (onCreateSession) onCreateSession();
-                      setIsSessionDropdownOpen(false);
-                    }}
-                    className="text-indigo-400 hover:text-indigo-300 flex items-center gap-1 text-[11px] font-medium"
-                  >
-                    <Plus className="w-3 h-3" /> Yeni
-                  </button>
+          {/* Aktif Ajan Avatarları Kümesi (Odadaki üyeler) */}
+          {isRoom && memberBots.length > 0 && (
+            <div className="hidden lg:flex items-center -space-x-1 ml-1" title={`${memberBots.length} Ekip Üyesi`}>
+              {memberBots.slice(0, 5).map((bot) => (
+                <div
+                  key={bot.id}
+                  className="w-5 h-5 rounded-full bg-[var(--bg-surface-elevated)] border border-[var(--bg-surface)] flex items-center justify-center text-[10px] shadow-xs"
+                  title={`${bot.name} (${bot.role})`}
+                >
+                  {bot.avatar}
                 </div>
-                <div className="max-h-56 overflow-y-auto space-y-0.5">
-                  {sessions.map((s) => {
-                    const isCur = s.id === activeSessionId;
-                    return (
-                      <div
-                        key={s.id}
-                        className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs transition-colors cursor-pointer group ${
-                          isCur
-                            ? "bg-indigo-600/20 text-indigo-200 border border-indigo-500/30"
-                            : "text-zinc-300 hover:bg-zinc-800/60"
-                        }`}
-                        onClick={() => {
-                          if (onSwitchSession) onSwitchSession(s.id);
-                          setIsSessionDropdownOpen(false);
-                        }}
-                      >
-                        <div className="flex items-center gap-2 truncate">
-                          {s.summary ? <span title="Sıkıştırılmış Hafıza">⚡</span> : <span>💬</span>}
-                          <span className="truncate font-medium">{s.title}</span>
-                        </div>
-                        {sessions.length > 1 && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (window.confirm(`"${s.title}" oturumunu silmek istediğinize emin misiniz?`)) {
-                                if (onDeleteSession) onDeleteSession(s.id);
-                              }
-                            }}
-                            title="Oturumu Sil"
-                            className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-rose-500/20 text-zinc-500 hover:text-rose-400 transition-opacity"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
+              ))}
+              {memberBots.length > 5 && (
+                <div className="w-5 h-5 rounded-full bg-[var(--bg-surface-elevated)] border border-[var(--bg-surface)] flex items-center justify-center text-[9px] font-mono text-[var(--text-tertiary)]">
+                  +{memberBots.length - 5}
                 </div>
-              </div>
+              )}
+            </div>
+          )}
+
+          {/* Tek Canlı Durum Göstergesi (EKİP HAZIR veya Anlık İşlem) */}
+          <div className="hidden sm:flex items-center ml-2 truncate">
+            {activeTask ? (
+              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-mono truncate animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                <span className="font-semibold">{activeTask.botName}:</span>
+                <span className="truncate max-w-[200px]">{activeTask.currentStatus || "İşlemde..."}</span>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 text-[10px] font-mono">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                EKİP HAZIR
+              </span>
             )}
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5 sm:gap-2">
-          {/* Quick "Yeni Sohbet" button */}
-          <button
-            onClick={() => onCreateSession && onCreateSession()}
-            title="Yeni Temiz Sohbet Başlat"
-            className="hidden sm:flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-zinc-800/90 hover:bg-zinc-800 text-zinc-300 hover:text-white text-xs font-medium border border-zinc-700/60 transition-all cursor-pointer"
+        {/* Sağ Grup: Hafıza Popover + Arama + Markdown Dışa Aktar + Acil Durdur + Sağ Panel Toggle */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* Sıkıştırılmış Hafıza Rozeti & Popover */}
+          <Popover
+            placement="bottom-end"
+            trigger={
+              <button
+                type="button"
+                title="Sıkıştırılmış Hafıza & Bağlam"
+                className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono transition-colors cursor-pointer border ${
+                  activeSession?.summary
+                    ? "bg-purple-600/15 text-purple-300 border-purple-500/30 hover:bg-purple-600/25"
+                    : "bg-[var(--bg-surface-elevated)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:bg-[var(--bg-surface-hover)]"
+                }`}
+              >
+                <Zap className="w-3 h-3 text-purple-400 fill-current" />
+                <span className="hidden xs:inline">Hafıza</span>
+                {activeSession?.summary && <span className="text-[10px] font-semibold text-purple-400">⚡</span>}
+              </button>
+            }
           >
-            <Plus className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Yeni Sohbet</span>
+            {({ close }) => (
+              <div className="w-72 sm:w-80 max-w-[88vw] p-3 space-y-2.5 text-xs">
+                <div className="flex items-center justify-between border-b border-[var(--border-subtle)] pb-2">
+                  <div className="flex items-center gap-1.5 font-semibold text-[var(--text-primary)]">
+                    <Brain className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Sıkıştırılmış Hafıza</span>
+                  </div>
+                  <Badge variant="purple" size="xs">%90 Token Tasarrufu</Badge>
+                </div>
+
+                <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
+                  {activeSession?.summary || "Bu sohbet henüz sıkıştırılmamış. Aşağıdaki butonla eski komut çıktıları özetlenerek hafızaya mühürlenir."}
+                </p>
+
+                <div className="flex items-center justify-between pt-1 border-t border-[var(--border-subtle)]">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => {
+                      onCompactSession?.();
+                      close();
+                    }}
+                  >
+                    <Zap className="w-3 h-3 text-purple-400" />
+                    <span>Şimdi Sıkıştır</span>
+                  </Button>
+                  <Button variant="secondary" size="xs" onClick={close}>
+                    Kapat
+                  </Button>
+                </div>
+              </div>
+            )}
+          </Popover>
+
+          {/* Sohbet İçi Arama Toggle */}
+          <button
+            type="button"
+            onClick={() => setIsSearchOpen(!isSearchOpen)}
+            title="Sohbette Ara"
+            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+              isSearchOpen || searchQuery
+                ? "bg-purple-600/20 text-purple-300"
+                : "text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-hover)]"
+            }`}
+          >
+            <Search className="w-3.5 h-3.5" />
           </button>
 
-          {/* Quick "Sıkıştır (Compact)" button */}
-          <button
-            onClick={onCompactSession}
-            title="Sohbeti Sıkıştır: Geçmiş çıktılar özetlenir, hafızaya mühürlenir ve token tasarrufu sağlanır."
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 hover:text-purple-200 text-xs font-medium border border-purple-500/30 transition-all cursor-pointer"
-          >
-            <Zap className="w-3.5 h-3.5 text-purple-400 fill-current" />
-            <span className="hidden xs:inline">Sıkıştır</span>
-          </button>
-
-          {/* Emergency Stop Button (Prominent when running) */}
-          {(isProcessing || activeTask) && (
+          {/* Markdown Dışa Aktar */}
+          {onExportMarkdown && (
             <button
-              onClick={onEmergencyStop}
-              title="Tüm Botları ve Komutları Acil Durdur"
-              className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-medium text-xs flex items-center gap-1.5 shadow-md shadow-rose-600/30 animate-pulse transition-all cursor-pointer"
+              type="button"
+              onClick={onExportMarkdown}
+              title="Sohbeti Markdown (.md) Olarak İndir"
+              className="p-1.5 rounded-lg text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors cursor-pointer hidden sm:flex"
             >
-              <Octagon className="w-3.5 h-3.5 fill-current" />
-              <span className="hidden sm:inline">Acil Durdur</span>
+              <Download className="w-3.5 h-3.5" />
             </button>
           )}
 
+          {/* Acil Durdur (İşlemdeyken Parlak Kırmızı) */}
+          {(isProcessing || activeTask) && (
+            <Button
+              variant="danger-solid"
+              size="xs"
+              icon={Octagon}
+              onClick={onEmergencyStop}
+              className="animate-pulse"
+              title="Tüm botları ve komutları hemen durdur"
+            >
+              <span className="hidden sm:inline">Durdur</span>
+            </Button>
+          )}
+
+          {/* Sohbeti Temizle */}
           <button
+            type="button"
             onClick={onClearChat}
             title="Sohbeti Temizle"
-            className="p-2 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-rose-400 transition-colors"
+            className="p-1.5 rounded-lg text-[var(--text-secondary)] hover:text-rose-400 hover:bg-[var(--bg-surface-hover)] transition-colors cursor-pointer"
           >
-            <Trash2 className="w-4 h-4" />
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Sağ Panel Aç/Kapa Butonu (Kanban / Dosyalar / Hafıza / Maliyet) */}
+          <button
+            type="button"
+            onClick={onToggleRightPanel}
+            title={isRightPanelOpen ? "Sağ Paneli Kapat" : "Görevler & Dosyalar Panelini Aç"}
+            className={`p-1.5 rounded-lg transition-colors cursor-pointer border ${
+              isRightPanelOpen
+                ? "bg-purple-600/20 text-purple-300 border-purple-500/30"
+                : "bg-[var(--bg-surface-elevated)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-hover)]"
+            }`}
+          >
+            <SidebarIcon className="w-3.5 h-3.5" />
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* Sıkıştırılmış Hafıza Rozeti (Aktif Oturum Compact Edildiyse) */}
-      {activeSession?.summary && (
-        <div className="bg-purple-950/40 border-b border-purple-500/30 px-4 sm:px-5 py-2 flex items-center justify-between text-xs text-purple-200 shrink-0 backdrop-blur-sm">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-base shrink-0">🧠</span>
-            <div className="truncate">
-              <span className="font-semibold text-purple-300 mr-1.5">Sıkıştırılmış Hafıza:</span>
-              <span className="text-purple-300/80 font-mono text-[11px] truncate">{activeSession.summary}</span>
-            </div>
+      {/* Arama Input Çubuğu (Açıldığında) */}
+      {isSearchOpen && (
+        <div className="px-4 py-2 bg-[var(--bg-surface-elevated)] border-b border-[var(--border-subtle)] flex items-center justify-between gap-2 shrink-0 animate-in fade-in duration-100">
+          <div className="flex items-center gap-2 flex-1">
+            <Search className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+            <input
+              type="text"
+              autoFocus
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Sohbette metin veya komut ara..."
+              className="w-full bg-transparent text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none"
+            />
           </div>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/40 shrink-0 ml-2 hidden sm:inline">
-            %90 Token Tasarrufu
-          </span>
+          {searchQuery && (
+            <Badge variant="mono" size="xs">
+              {filteredMessages.length} sonuç
+            </Badge>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              setSearchQuery("");
+              setIsSearchOpen(false);
+            }}
+            className="p-1 rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 
-      {/* 🔴 CANLI EKİP VE ANLIK GÖREV ÇUBUĞU (Responsive Flex-Wrap) */}
-      <div className={`border-b px-3 sm:px-5 py-2 flex flex-wrap items-center justify-between gap-2.5 text-xs shrink-0 transition-all select-none ${
-        activeTask 
-          ? "bg-gradient-to-r from-amber-950/80 via-indigo-950/70 to-zinc-900 border-amber-500/40 animate-pulse shadow-md" 
-          : "bg-zinc-900/60 border-zinc-800/80 text-zinc-300"
-      }`}>
-        <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
-          {/* Durum Rozeti */}
-          {activeTask ? (
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="text-xl animate-bounce">{activeTask.botAvatar || "⚡"}</span>
-              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[11px] font-mono font-semibold">
-                <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-                CANLI İŞLEMDE {activeTask.goalMode ? `(Tur ${activeTask.rounds || 1})` : ""}
-              </span>
+      {/* 2. MESAJLAR AKIŞI */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {filteredMessages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-[var(--text-tertiary)] space-y-2">
+            <div className="w-12 h-12 rounded-2xl bg-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] flex items-center justify-center text-xl">
+              {target.avatar || "💬"}
             </div>
-          ) : (
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 text-[11px] font-mono font-medium">
-                <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                EKİP HAZIR
-              </span>
-            </div>
-          )}
-
-          {/* 3'lü Canlı Bilgi Bölmesi: KİM / NE YAPIYOR / NERDE */}
-          <div className="flex flex-wrap items-center gap-2 font-mono text-[11px]">
-            {/* 1. KİM */}
-            <div className="flex items-center gap-1 shrink-0 bg-zinc-900/80 px-2.5 py-1 rounded border border-zinc-800">
-              <span className="text-zinc-500 text-[10px]">KİM:</span>
-              <span className="font-semibold text-zinc-200">
-                {activeTask ? activeTask.botName : (lastActivity?.botName || "Tüm Ekip")}
-              </span>
-            </div>
-
-            {/* 2. NE YAPIYOR */}
-            <div className="flex items-center gap-1 shrink-0 bg-zinc-900/80 px-2.5 py-1 rounded border border-zinc-800 max-w-xs md:max-w-md truncate">
-              <span className="text-zinc-500 text-[10px]">EYLEM:</span>
-              <span className={`font-medium truncate ${activeTask ? "text-amber-300 font-semibold" : "text-zinc-400"}`}>
-                {activeTask ? (activeTask.currentStatus || "İşlem yürütülüyor...") : (lastActivity?.currentStatus || "Komut bekleniyor...")}
-              </span>
-            </div>
-
-            {/* 3. NERDE */}
-            <div className="flex items-center gap-1 shrink-0 bg-zinc-900/80 px-2.5 py-1 rounded border border-zinc-800 hidden md:flex">
-              <span className="text-zinc-500 text-[10px]">NERDE:</span>
-              <span className="text-zinc-300 truncate max-w-[200px]" title={activeTask?.cwd || lastActivity?.cwd || "~/Projeler/team"}>
-                📁 {activeTask?.cwd ? activeTask.cwd.replace("/home/samet", "~") : (lastActivity?.cwd ? lastActivity.cwd.replace("/home/samet", "~") : "~/Projeler/team")}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Sağ Taraf: Acil Durdur veya Koruma Rozeti */}
-        <div className="flex items-center gap-2 shrink-0">
-          {activeTask ? (
-            <button
-              onClick={onEmergencyStop}
-              className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-rose-600/30 transition-all cursor-pointer"
-            >
-              <Octagon className="w-3.5 h-3.5 fill-current" />
-              Acil Durdur
-            </button>
-          ) : (
-            <span className="text-[10px] text-zinc-400 font-mono hidden lg:inline">
-              🛡️ 7 Kural & Kalıcı Hafıza Devrede
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Messages Scroll Area */}
-      <div className="flex-1 overflow-y-auto p-5 space-y-4">
-        {messages.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-zinc-500 space-y-2 select-none">
-            <div className="text-3xl mb-1">{target.avatar || "💬"}</div>
-            <p className="font-medium text-zinc-300">{target.name} ile yeni bir görüşme başlatın</p>
-            <p className="text-xs text-zinc-400 max-w-md text-center">
-              {isRoom 
-                ? "Bu odada tüm ekip birlikte çalışır. Goal Modu açarak hedeflerinizin bitene kadar otonom sürdürülmesini sağlayabilirsiniz."
-                : target.description}
+            <p className="text-xs font-medium text-[var(--text-secondary)]">
+              {searchQuery ? `"${searchQuery}" ile eşleşen mesaj bulunamadı.` : `Henüz mesaj yok. ${target.name} ekibine bir görev verin.`}
             </p>
           </div>
         ) : (
-          messages.map((msg) => (
-            <MessageItem key={msg.id} message={msg} />
+          filteredMessages.map((msg) => (
+            <MessageItem
+              key={msg.id}
+              message={msg}
+              onRollback={onRollback}
+              onQuoteReply={(m) => setQuotedMessage(m)}
+              searchHighlight={searchQuery}
+            />
           ))
         )}
-
-        {/* Canlı İşlem ve Adım Takip Kartı (Chat İçi Detaylı Gösterge) */}
-        {(activeTask || isProcessing) && (
-          <div className="rounded-xl border border-indigo-500/40 bg-zinc-900/95 backdrop-blur-md p-4 space-y-3 shadow-xl shadow-black/50 animate-in fade-in duration-200">
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-2.5">
-              <div className="flex items-center gap-2.5">
-                <span className="text-2xl animate-spin">{activeTask?.botAvatar || "⚙️"}</span>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-xs text-zinc-100">
-                      {activeTask?.botName || "Ekip Üyesi"}
-                    </span>
-                    <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-mono flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                      AKTİF SÜREÇ
-                    </span>
-                    {(goalMode || activeTask?.goalMode) && (
-                      <span className="px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-mono">
-                        🎯 GOAL MODU (Tur {activeTask?.rounds || 1})
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[11px] text-zinc-400 mt-0.5">
-                    Otonom adımlar yürütülüyor ve çıktılar doğrulanıyor.
-                  </p>
-                </div>
-              </div>
-
-              <button
-                onClick={onEmergencyStop}
-                className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs flex items-center gap-1.5 shadow-md shadow-rose-600/30 transition-all cursor-pointer"
-              >
-                <Octagon className="w-3.5 h-3.5 fill-current" /> Acil Durdur
-              </button>
-            </div>
-
-            {/* KİM NE YAPIYOR NERDE 3'LÜ KARTLARI */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-              <div className="bg-zinc-950/70 p-2.5 rounded-lg border border-zinc-800/80">
-                <span className="text-[10px] text-zinc-500 block font-mono font-medium">👤 KİM</span>
-                <span className="font-semibold text-xs text-zinc-100 flex items-center gap-1.5 mt-0.5">
-                  <span>{activeTask?.botAvatar || "🤖"}</span>
-                  <span className="truncate">{activeTask?.botName || "Ekip"}</span>
-                </span>
-              </div>
-
-              <div className="bg-zinc-950/70 p-2.5 rounded-lg border border-zinc-800/80">
-                <span className="text-[10px] text-zinc-500 block font-mono font-medium">⚡ NE YAPIYOR</span>
-                <span className="font-semibold text-xs text-amber-300 truncate block mt-0.5 font-mono">
-                  {activeTask?.currentStatus || activeToolEvent?.toolName || "Kod planlanıyor ve araç çağrılıyor..."}
-                </span>
-              </div>
-
-              <div className="bg-zinc-950/70 p-2.5 rounded-lg border border-zinc-800/80">
-                <span className="text-[10px] text-zinc-500 block font-mono font-medium">📍 NERDE</span>
-                <span className="font-mono text-xs text-zinc-300 truncate block mt-0.5" title={activeTask?.cwd || "~/Projeler/team"}>
-                  📁 {activeTask?.cwd ? activeTask.cwd.replace("/home/samet", "~") : "~/Projeler/team"}
-                </span>
-              </div>
-            </div>
-
-            {/* Çalıştırılan Komut / Argüman Varsa */}
-            {activeToolEvent?.args && (
-              <div className="bg-zinc-950/90 rounded-lg p-2.5 border border-zinc-800/90 font-mono text-xs text-emerald-400">
-                <div className="text-[10px] text-zinc-500 mb-1.5 flex items-center justify-between select-none">
-                  <span className="flex items-center gap-1.5">
-                    <span>ÇALIŞTIRILAN KOMUT / ARAÇ:</span>
-                    <span className="text-zinc-300 font-semibold">{activeToolEvent.toolName}</span>
-                  </span>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(activeToolEvent.args);
-                      setCopiedCmd(true);
-                      setTimeout(() => setCopiedCmd(false), 2000);
-                    }}
-                    className="px-1.5 py-0.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 flex items-center gap-1 text-[10px] cursor-pointer"
-                  >
-                    {copiedCmd ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                    <span>{copiedCmd ? "Kopyalandı" : "Komutu Kopyala"}</span>
-                  </button>
-                </div>
-                <div className="overflow-x-auto whitespace-pre-wrap break-all text-[11px] text-zinc-200 select-text">
-                  {activeToolEvent.args}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Bar */}
-      <div className="p-4 border-t border-zinc-800/80 bg-zinc-900/30 backdrop-blur-sm">
-        {/* Toolbar: Goal Mode Toggle & Mentions */}
-        <div className="flex items-center justify-between gap-2 mb-2 overflow-x-auto pb-1 text-xs">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setGoalMode((prev) => !prev)}
-              title="Goal Modu: Hedefiniz tamamen bitene kadar ekip durmaksızın çalışır."
-              className={`px-2.5 py-1 rounded-full text-xs font-medium flex items-center gap-1.5 transition-all ${
-                goalMode
-                  ? "bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm shadow-amber-500/10"
-                  : "bg-zinc-800/90 text-zinc-400 hover:text-zinc-200 border border-zinc-700/60"
+      {/* 3. ALINTI / THREAD BANNER */}
+      {quotedMessage && (
+        <div className="px-4 py-2 bg-[var(--bg-surface-elevated)] border-t border-[var(--border-subtle)] flex items-center justify-between text-xs text-[var(--text-secondary)] shrink-0 animate-in fade-in duration-100">
+          <div className="flex items-center gap-2 truncate">
+            <MessageSquareQuote className="w-4 h-4 text-purple-400 shrink-0" />
+            <span className="font-semibold text-[var(--text-primary)]">
+              {quotedMessage.botName || "Mesaj"}:
+            </span>
+            <span className="truncate italic text-[11px]">
+              "{quotedMessage.content ? quotedMessage.content.slice(0, 100) : "Araç çağrısı"}..."
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setQuotedMessage(null)}
+            className="p-1 rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* @MENTION AUTOCOMPLETE POPUP */}
+      {mentionQuery !== null && filteredMentions.length > 0 && (
+        <div className="absolute bottom-20 left-3 sm:left-4 z-30 w-64 max-w-[88vw] bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl shadow-2xl p-1 space-y-0.5 backdrop-blur-xl animate-in fade-in duration-100">
+          <div className="px-2 py-1 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase border-b border-[var(--border-subtle)]">
+            Ajan Etiketle (@)
+          </div>
+          {filteredMentions.map((cand, idx) => (
+            <div
+              key={cand.id}
+              onClick={() => selectMention(cand)}
+              className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs cursor-pointer transition-colors ${
+                idx === mentionIndex
+                  ? "bg-purple-600/20 text-purple-300 font-medium"
+                  : "text-[var(--text-secondary)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text-primary)]"
               }`}
             >
-              <Target className={`w-3.5 h-3.5 ${goalMode ? "text-amber-400 animate-spin" : ""}`} />
-              <span>{goalMode ? "🎯 Goal Modu Açık (Bitene Kadar Durma)" : "Goal Modu"}</span>
-            </button>
-
-            {isRoom && (
-              <>
-                <button
-                  onClick={() => insertMention("@everyone")}
-                  className="px-2 py-0.5 rounded-full bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 text-[11px] border border-indigo-500/20 transition-colors"
-                >
-                  @everyone
-                </button>
-                {allBots.slice(0, 4).map((b) => (
-                  <button
-                    key={b.id}
-                    onClick={() => insertMention(`@${b.name}`)}
-                    className="px-2 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] border border-zinc-700/60 transition-colors"
-                  >
-                    @{b.name}
-                  </button>
-                ))}
-              </>
-            )}
-          </div>
-
-          {goalMode && (
-            <div className="text-[11px] text-amber-400/90 font-medium flex items-center gap-1 shrink-0">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
-              Hedef tamamlanana kadar durmaksızın icra edilir
+              <span>{cand.avatar}</span>
+              <div className="truncate">
+                <span className="font-medium text-[var(--text-primary)] mr-1">@{cand.name}</span>
+                <span className="text-[10px] text-[var(--text-tertiary)] font-normal">{cand.role}</span>
+              </div>
             </div>
-          )}
+          ))}
         </div>
+      )}
 
-        {/* Selected Images Preview Strip */}
+      {/* 4. COMPOSER (Çok Satırlı, Görsel Yapıştırma, Goal Modu) */}
+      <div className="p-3 sm:p-4 border-t border-[var(--border-subtle)] bg-[var(--bg-surface)] shrink-0">
+        {/* Seçilen Görseller Önizlemesi */}
         {selectedImages.length > 0 && (
-          <div className="flex items-center gap-2.5 mb-2.5 p-2 bg-zinc-900/80 rounded-xl border border-zinc-800 overflow-x-auto">
-            <span className="text-[10px] text-zinc-400 uppercase font-semibold px-1">
-              Görseller ({selectedImages.length}):
-            </span>
+          <div className="flex flex-wrap gap-2 mb-2.5">
             {selectedImages.map((img, idx) => (
-              <div key={idx} className="relative group shrink-0">
-                <img
-                  src={img}
-                  alt="eklenti"
-                  className="w-14 h-14 object-cover rounded-lg border border-zinc-700 shadow-sm"
-                />
+              <div key={idx} className="relative group rounded-xl overflow-hidden border border-[var(--border-default)]">
+                <img src={img} alt="eklenen" className="w-14 h-14 object-cover" />
                 <button
+                  type="button"
                   onClick={() => removeImage(idx)}
-                  className="absolute -top-1.5 -right-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-full p-0.5 shadow-md transition-colors"
+                  className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white transition-opacity"
                 >
-                  <X className="w-3 h-3" />
+                  <X className="w-4 h-4" />
                 </button>
               </div>
             ))}
           </div>
         )}
 
-        <div className={`flex items-end gap-2 bg-zinc-900 border ${
-          goalMode ? "border-amber-500/50 focus-within:border-amber-500" : "border-zinc-800 focus-within:border-indigo-500/70"
-        } rounded-xl p-2 transition-all shadow-inner`}>
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleFileChange}
-            accept="image/*"
-            multiple
-            className="hidden"
-          />
-
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            title="Görsel Yükle (veya doğrudan yapıştır)"
-            className="p-2 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors shrink-0"
-          >
-            <ImageIcon className="w-4 h-4" />
-          </button>
-
+        <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-base)] focus-within:border-purple-500/60 transition-colors shadow-xs overflow-hidden">
           <textarea
             ref={textareaRef}
             rows={1}
@@ -578,29 +641,78 @@ export default function ChatArea({
             onChange={handleInput}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            placeholder={
-              goalMode
-                ? "🎯 Ulaşılacak hedefi ve isterleri yazın (Ekip tamamlanana kadar durmayacaktır)..."
-                : isRoom 
-                  ? "Tüm ekibe veya belirli bir uzmana görev yazın... (Görsel yapıştırabilirsiniz)" 
-                  : `${target.name}'a mesaj veya görev yazın...`
-            }
-            className="flex-1 bg-transparent text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none max-h-44 px-2 py-1 leading-normal"
+            placeholder={`Bir talimat yazın (@ ile ajan etiketleyin)...`}
+            className="w-full bg-transparent p-3 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none resize-none leading-relaxed"
           />
 
-          <button
-            onClick={handleSend}
-            disabled={(!input.trim() && selectedImages.length === 0) || isProcessing}
-            className={`p-2.5 rounded-lg flex items-center justify-center transition-all ${
-              (input.trim() || selectedImages.length > 0) && !isProcessing
-                ? goalMode
-                  ? "bg-amber-600 hover:bg-amber-500 text-white shadow-md shadow-amber-600/30"
-                  : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/20"
-                : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
-            }`}
-          >
-            <Send className="w-4 h-4" />
-          </button>
+          {/* Alt Araç Çubuğu: Mention, Görsel, Goal Modu, Gönder */}
+          <div className="px-3 py-2 border-t border-[var(--border-subtle)]/50 flex items-center justify-between gap-2 select-none bg-[var(--bg-surface-elevated)]/40">
+            <div className="flex items-center gap-1">
+              {/* @ Etiket Butonu */}
+              <button
+                type="button"
+                onClick={() => {
+                  setInput((prev) => (prev ? `${prev} @` : "@"));
+                  setMentionQuery("");
+                  textareaRef.current?.focus();
+                }}
+                title="Ajan Etiketle (@)"
+                className="p-1.5 rounded-lg text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors cursor-pointer"
+              >
+                <AtSign className="w-3.5 h-3.5" />
+              </button>
+
+              {/* Görsel Yükle */}
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                title="Görsel veya Ekran Görüntüsü Ekle"
+                className="p-1.5 rounded-lg text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-hover)] transition-colors cursor-pointer"
+              >
+                <ImageIcon className="w-3.5 h-3.5" />
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept="image/*"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+
+              {/* Goal (Otonom) Modu Anahtarı */}
+              <button
+                type="button"
+                onClick={() => setGoalMode(!goalMode)}
+                title="Goal Modu: Ajanlar görev tam ve çalışır olarak bitene kadar durmaksızın test edip düzeltir."
+                className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] font-medium transition-all cursor-pointer border ${
+                  goalMode
+                    ? "bg-purple-600/20 text-purple-300 border-purple-500/40 shadow-xs"
+                    : "text-[var(--text-tertiary)] border-transparent hover:text-[var(--text-secondary)] hover:bg-[var(--bg-surface-hover)]"
+                }`}
+              >
+                <Target className={`w-3.5 h-3.5 ${goalMode ? "text-purple-400" : ""}`} />
+                <span className="hidden sm:inline">Goal Modu</span>
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-mono text-[var(--text-muted)] hidden md:inline">
+                Enter gönder · Shift+Enter yeni satır
+              </span>
+
+              <Button
+                variant="primary"
+                size="sm"
+                icon={Send}
+                disabled={(!input.trim() && selectedImages.length === 0) || isProcessing}
+                loading={isProcessing}
+                onClick={handleSend}
+              >
+                Gönder
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

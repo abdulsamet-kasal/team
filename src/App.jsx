@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from "react";
 import Sidebar from "./components/Sidebar";
 import ChatArea from "./components/ChatArea";
+import RightPanel from "./components/RightPanel";
 import BotModal from "./components/BotModal";
 import SettingsModal from "./components/SettingsModal";
-import TerminalDrawer from "./components/TerminalDrawer";
-import MemoryModal from "./components/MemoryModal";
 import RoomModal from "./components/RoomModal";
+import TerminalDrawer from "./components/TerminalDrawer";
+import CommandPalette from "./components/ui/CommandPalette";
 
 export default function App() {
   const [bots, setBots] = useState([]);
@@ -24,55 +25,82 @@ export default function App() {
   const [sessions, setSessions] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState(null);
 
-  // Responsive Mobile Drawer
+  // Theme: 'dark' | 'light'
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem("team_theme") || "dark";
+  });
+
+  // Approval Mode: 'always' | 'dangerous' | 'yolo'
+  const [approvalMode, setApprovalMode] = useState("dangerous");
+
+  // Right Panel: Kanban, Files, Memory, Cost
+  const [isRightPanelOpen, setIsRightPanelOpen] = useState(false);
+  const [rightPanelTab, setRightPanelTab] = useState("kanban");
+
+  // Command Palette (Ctrl+K)
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+
+  // Responsive Mobile Drawers
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   // Modals
   const [isBotModalOpen, setIsBotModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isTerminalOpen, setIsTerminalOpen] = useState(false);
-  const [isMemoryOpen, setIsMemoryOpen] = useState(false);
   const [isRoomModalOpen, setIsRoomModalOpen] = useState(false);
+  const [isTerminalOpen, setIsTerminalOpen] = useState(false);
 
   const wsRef = useRef(null);
 
-  // 1. Initial Load
+  // Apply theme to HTML root
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("team_theme", theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
+  };
+
+  // 1. Initial Load & Listeners
   useEffect(() => {
     fetchInitialData();
+    fetchApprovalMode();
     setupWebSocket();
 
     const handleGlobalKeyDown = (e) => {
+      // Ctrl+` Terminal Toggle
       if (e.ctrlKey && e.key === "`") {
+        e.preventDefault();
         setIsTerminalOpen((prev) => !prev);
       }
+      // Ctrl+K Command Palette
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setIsCommandPaletteOpen((prev) => !prev);
+      }
     };
+
+    const handleCustomPaletteOpen = () => {
+      setIsCommandPaletteOpen(true);
+    };
+
     window.addEventListener("keydown", handleGlobalKeyDown);
+    window.addEventListener("open-command-palette", handleCustomPaletteOpen);
+
     return () => {
       window.removeEventListener("keydown", handleGlobalKeyDown);
+      window.removeEventListener("open-command-palette", handleCustomPaletteOpen);
       wsRef.current?.close();
     };
   }, []);
 
-  // 2. Load Messages and Sessions when Active Target changes
+  // 2. Load Messages & Sessions when active target changes
   useEffect(() => {
     if (activeId) {
       fetchMessages(activeId);
       fetchSessions(activeId);
     }
   }, [activeId]);
-
-  const fetchSessions = async (targetId) => {
-    try {
-      const res = await fetch(`/api/sessions/${targetId}`);
-      if (res.ok) {
-        const data = await res.json();
-        setSessions(data.sessions || []);
-        setActiveSessionId(data.activeSessionId || null);
-      }
-    } catch (err) {
-      console.error("Sessions load error:", err);
-    }
-  };
 
   const fetchInitialData = async () => {
     try {
@@ -100,6 +128,53 @@ export default function App() {
       }
     } catch (err) {
       console.error("Initial load error:", err);
+    }
+  };
+
+  const fetchApprovalMode = async () => {
+    try {
+      const res = await fetch("/api/approval/mode");
+      if (res.ok) {
+        const data = await res.json();
+        setApprovalMode(data.mode || "dangerous");
+      }
+    } catch (err) {
+      console.error("Approval mode load error:", err);
+    }
+  };
+
+  const handleSetApprovalMode = async (mode) => {
+    try {
+      const res = await fetch("/api/approval/mode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode })
+      });
+      if (res.ok) {
+        setApprovalMode(mode);
+      }
+    } catch (err) {
+      console.error("Approval mode update error:", err);
+    }
+  };
+
+  const handleCycleApprovalMode = () => {
+    const modes = ["always", "dangerous", "yolo"];
+    const currentIdx = modes.indexOf(approvalMode);
+    const nextMode = modes[(currentIdx + 1) % modes.length];
+    handleSetApprovalMode(nextMode);
+  };
+
+  const fetchSessions = async (targetId) => {
+    try {
+      const res = await fetch(`/api/sessions/${targetId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSessions(data.sessions || []);
+        setActiveSessionId(data.activeSessionId || null);
+      }
+    } catch (err) {
+      console.error("Sessions load error:", err);
     }
   };
 
@@ -215,7 +290,6 @@ export default function App() {
         if (data.targetId === activeId) {
           setActiveToolEvent(data.event);
         }
-        // Also log to terminal
         if (data.event.type === "tool_start") {
           setTerminalLogs((prev) => [
             ...prev,
@@ -241,6 +315,34 @@ export default function App() {
             ...prev,
             { type: data.chunk.type || "stdout", text: data.chunk.chunk }
           ]);
+        }
+        break;
+
+      case "approval_mode_updated":
+        setApprovalMode(data.mode);
+        break;
+
+      case "settings_updated":
+        if (data.settings) {
+          setSettings(data.settings);
+        }
+        break;
+
+      case "provider_switched":
+        if (data.settings) {
+          setSettings(data.settings);
+        }
+        break;
+
+      case "model_selected":
+        if (data.defaultModel) {
+          setSettings((prev) => ({ ...prev, defaultModel: data.defaultModel }));
+        }
+        break;
+
+      case "bots_updated":
+        if (data.bots) {
+          setBots(data.bots);
         }
         break;
 
@@ -292,6 +394,24 @@ export default function App() {
       setActiveToolEvent(null);
     } catch (err) {
       console.error("Emergency stop error:", err);
+    }
+  };
+
+  const handleRollback = async (commitHash) => {
+    try {
+      const res = await fetch("/api/git/rollback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commitHash })
+      });
+      if (res.ok) {
+        alert(`Git durumu başarıyla ${commitHash.slice(0, 7)} checkpoint'ine geri alındı.`);
+      } else {
+        alert("Geri alma işlemi başarısız oldu.");
+      }
+    } catch (err) {
+      console.error("Rollback error:", err);
+      alert(`Hata: ${err.message}`);
     }
   };
 
@@ -367,6 +487,36 @@ export default function App() {
     }
   };
 
+  const handleExportMarkdown = () => {
+    if (!messages.length) return;
+    const targetObj = rooms.find((r) => r.id === activeId) || bots.find((b) => b.id === activeId);
+    let md = `# Team AI Sohbet Günlüğü: ${targetObj?.name || "Sohbet"}\n`;
+    md += `Tarih: ${new Date().toLocaleString("tr-TR")}\n\n---\n\n`;
+
+    messages.forEach((m) => {
+      const author = m.role === "user" ? "Kullanıcı" : `${m.botName || "Ajan"} (${m.botRole || "Bot"})`;
+      const time = m.timestamp ? new Date(m.timestamp).toLocaleTimeString("tr-TR") : "";
+      md += `### ${author} - ${time}\n\n`;
+      if (m.content) md += `${m.content}\n\n`;
+      if (m.toolEvents && m.toolEvents.length) {
+        md += `*Araç Çağrıları:*\n`;
+        m.toolEvents.forEach((t) => {
+          md += `- **${t.toolName}**: \`${t.args || ""}\`\n`;
+        });
+        md += `\n`;
+      }
+      md += `---\n\n`;
+    });
+
+    const blob = new Blob([md], { type: "text/markdown;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `team-chat-${targetObj?.name || "export"}-${Date.now()}.md`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   const handleSaveBot = async (botData) => {
     try {
       const method = botData.id ? "PUT" : "POST";
@@ -399,15 +549,56 @@ export default function App() {
     }
   };
 
+  const handleSelectModel = async ({ model, botId, applyToAll }) => {
+    try {
+      const res = await fetch("/api/models/select", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model, botId, applyToAll })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.settings) setSettings(data.settings);
+        if (data.bots) setBots(data.bots);
+      }
+    } catch (err) {
+      console.error("Model select error:", err);
+    }
+  };
+
+  const handleSwitchProvider = async (providerId) => {
+    try {
+      const res = await fetch("/api/providers/switch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerId })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.settings) setSettings(data.settings);
+      }
+    } catch (err) {
+      console.error("Provider switch error:", err);
+    }
+  };
+
   const handleSaveSettings = async (newSettings) => {
     try {
+      const { syncAllBots, ...cleanSettings } = newSettings;
       const res = await fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newSettings)
+        body: JSON.stringify(cleanSettings)
       });
       const data = await res.json();
       setSettings(data);
+
+      if (syncAllBots && cleanSettings.defaultModel) {
+        await handleSelectModel({
+          model: cleanSettings.defaultModel,
+          applyToAll: true
+        });
+      }
     } catch (err) {
       console.error("Settings save error:", err);
     }
@@ -429,28 +620,30 @@ export default function App() {
     rooms.find((r) => r.id === activeId) ||
     bots.find((b) => b.id === activeId);
 
-  // Bot durumlarını aktif görevlerle birleştir (Sayfa yenilense bile çalışan botlar hemen "çalışıyor" gözüksün)
   const combinedBotStatuses = { ...botStatuses };
   Object.values(activeTasks).forEach((t) => {
     if (t && t.botId) combinedBotStatuses[t.botId] = "working";
   });
 
   const currentTask = activeTasks[activeId] || Object.values(activeTasks)[0] || null;
+  const activeSessionObj = sessions.find((s) => s.id === activeSessionId) || sessions[0];
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-zinc-950 text-zinc-100 relative">
+    <div className="flex h-screen w-screen overflow-hidden bg-[var(--bg-base)] text-[var(--text-primary)] relative select-none">
       {/* Mobile Drawer Backdrop */}
       {isSidebarOpen && (
-        <div 
-          onClick={() => setIsSidebarOpen(false)} 
-          className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm md:hidden transition-opacity" 
+        <div
+          onClick={() => setIsSidebarOpen(false)}
+          className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm md:hidden transition-opacity"
         />
       )}
 
-      {/* Sidebar (Responsive drawer on mobile, static on desktop) */}
-      <div className={`fixed inset-y-0 left-0 z-50 md:static md:z-auto transition-transform duration-300 ease-in-out shrink-0 ${
-        isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
-      }`}>
+      {/* 1. Sol Sidebar (Command Center) */}
+      <div
+        className={`fixed inset-y-0 left-0 z-50 md:static md:z-auto transition-transform duration-200 ease-in-out shrink-0 ${
+          isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
+        }`}
+      >
         <Sidebar
           bots={bots}
           rooms={rooms}
@@ -462,26 +655,34 @@ export default function App() {
           onCloseMobile={() => setIsSidebarOpen(false)}
           onOpenNewBot={() => setIsBotModalOpen(true)}
           onOpenRoomModal={() => setIsRoomModalOpen(true)}
-          onOpenMemory={() => setIsMemoryOpen(true)}
+          onOpenMemory={() => {
+            setRightPanelTab("memory");
+            setIsRightPanelOpen(true);
+          }}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenTerminal={() => setIsTerminalOpen((prev) => !prev)}
+          onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+          onToggleTheme={toggleTheme}
+          currentTheme={theme}
+          approvalMode={approvalMode}
+          onCycleApprovalMode={handleCycleApprovalMode}
           botStatuses={combinedBotStatuses}
         />
       </div>
 
-      {/* Main Chat Area */}
+      {/* 2. Orta Sohbet Alanı (Tek üst bar + Zengin Markdown + Araç Kartları) */}
       <ChatArea
         target={currentTarget}
         messages={messages}
         onSendMessage={handleSendMessage}
         onClearChat={handleClearChat}
         onEmergencyStop={handleEmergencyStop}
+        onRollback={handleRollback}
         isProcessing={isProcessing}
         activeToolEvent={activeToolEvent}
         activeTask={currentTask}
         lastActivity={lastActivity}
         allBots={bots}
-        // Sessions & Responsive Controls
         sessions={sessions}
         activeSessionId={activeSessionId}
         onCreateSession={handleCreateSession}
@@ -489,6 +690,50 @@ export default function App() {
         onCompactSession={handleCompactSession}
         onDeleteSession={handleDeleteSession}
         onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
+        onToggleRightPanel={() => setIsRightPanelOpen((prev) => !prev)}
+        isRightPanelOpen={isRightPanelOpen}
+        onExportMarkdown={handleExportMarkdown}
+        settings={settings}
+        onModelSelect={handleSelectModel}
+        onProviderSwitch={handleSwitchProvider}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+      />
+
+      {/* 3. Sağ Panel (Kanban / Dosyalar / Hafıza / Maliyet) */}
+      <RightPanel
+        isOpen={isRightPanelOpen}
+        onClose={() => setIsRightPanelOpen(false)}
+        activeTab={rightPanelTab}
+        onTabChange={(tab) => setRightPanelTab(tab)}
+        bots={bots}
+        activeSession={activeSessionObj}
+      />
+
+      {/* 4. Ctrl+K Command Palette */}
+      <CommandPalette
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        rooms={rooms}
+        bots={bots}
+        onSelectTarget={(id) => setActiveId(id)}
+        onOpenTerminal={() => setIsTerminalOpen(true)}
+        onOpenRightPanelTab={(tab) => {
+          setRightPanelTab(tab);
+          setIsRightPanelOpen(true);
+        }}
+        onToggleTheme={toggleTheme}
+        currentTheme={theme}
+        onNewSession={handleCreateSession}
+        onCompactSession={handleCompactSession}
+        onEmergencyStop={handleEmergencyStop}
+        onExportMarkdown={handleExportMarkdown}
+        onSetApprovalMode={handleSetApprovalMode}
+        currentApprovalMode={approvalMode}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        onModelSelect={handleSelectModel}
+        onProviderSwitch={handleSwitchProvider}
+        currentProvider={settings.provider || "9router"}
+        currentModel={settings.defaultModel}
       />
 
       {/* Modals & Drawers */}
@@ -505,11 +750,6 @@ export default function App() {
         allBots={bots}
       />
 
-      <MemoryModal
-        isOpen={isMemoryOpen}
-        onClose={() => setIsMemoryOpen(false)}
-      />
-
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
@@ -517,7 +757,7 @@ export default function App() {
         onSave={handleSaveSettings}
       />
 
-      {/* Resizable Terminal on the Right */}
+      {/* Canlı Terminal Paneli (Ctrl+`) */}
       <TerminalDrawer
         isOpen={isTerminalOpen}
         onClose={() => setIsTerminalOpen(false)}

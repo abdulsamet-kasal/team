@@ -6,16 +6,26 @@ import cors from "cors";
 import { WebSocketServer, WebSocket } from "ws";
 import { store } from "./store.js";
 import { runAgentTurn } from "./agent.js";
-import { executeCommand, killAllActiveCommands } from "./executor.js";
+import { executeCommand, killAllActiveCommands, isDangerousCommand, createGitCheckpoint, rollbackGitCheckpoint } from "./executor.js";
 import { memoryManager } from "./memory.js";
 
 const activeControllers = new Map();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const AUTH_TOKEN = process.env.TEAM_AUTH_TOKEN || null;
 
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
+
+// Güvenlik Duvarı: Opsiyonel TEAM_AUTH_TOKEN koruması
+app.use((req, res, next) => {
+  if (!AUTH_TOKEN) return next();
+  const token = req.headers["x-team-token"] || req.query.token;
+  if (token === AUTH_TOKEN) return next();
+  if (req.method === "GET" && !req.path.startsWith("/api")) return next();
+  return res.status(401).json({ error: "Yetkisiz erişim: TEAM_AUTH_TOKEN doğrulanmadı." });
+});
 
 // HTTP Server & WebSocket
 const server = http.createServer(app);
@@ -48,14 +58,142 @@ function broadcast(data) {
 
 // REST API Endpoints
 
-// 1. Settings
+// 1. Settings & Providers & Models
 app.get("/api/settings", (req, res) => {
   res.json(store.getSettings());
 });
 
 app.post("/api/settings", (req, res) => {
   const updated = store.updateSettings(req.body);
+  broadcast({ type: "settings_updated", settings: updated });
   res.json(updated);
+});
+
+// Providers API
+app.get("/api/providers", (req, res) => {
+  res.json({
+    providers: store.getProviders(),
+    activeProvider: store.getSettings().provider || "9router",
+    settings: store.getSettings()
+  });
+});
+
+app.post("/api/providers/switch", (req, res) => {
+  const { providerId, apiBaseUrl, apiKey, defaultModel } = req.body;
+  if (!providerId) return res.status(400).json({ error: "providerId gereklidir." });
+  const result = store.switchProvider(providerId, { apiBaseUrl, apiKey, defaultModel });
+  broadcast({ type: "settings_updated", settings: result.settings });
+  broadcast({ type: "provider_switched", providerId, settings: result.settings });
+  res.json({
+    success: true,
+    ...result,
+    providers: store.getProviders()
+  });
+});
+
+app.post("/api/providers/save", (req, res) => {
+  const { providerId, config } = req.body;
+  if (!providerId) return res.status(400).json({ error: "providerId gereklidir." });
+  const saved = store.saveProviderConfig(providerId, config || {});
+  broadcast({ type: "settings_updated", settings: store.getSettings() });
+  res.json({
+    success: true,
+    provider: saved,
+    providers: store.getProviders(),
+    settings: store.getSettings()
+  });
+});
+
+// Dynamic Models API (Live query to active LLM provider)
+app.get("/api/models", async (req, res) => {
+  const settings = store.getSettings();
+  const baseUrl = (req.query.baseUrl || settings.apiBaseUrl || "http://localhost:20128/v1").replace(/\/+$/, "");
+  const apiKey = req.query.apiKey !== undefined ? req.query.apiKey : settings.apiKey;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+
+    const headers = {};
+    if (apiKey) {
+      headers["Authorization"] = `Bearer ${apiKey}`;
+    }
+
+    const resp = await fetch(`${baseUrl}/models`, {
+      method: "GET",
+      headers,
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => "");
+      return res.json({
+        online: false,
+        error: `HTTP ${resp.status}: ${errText.slice(0, 100)}`,
+        models: [
+          settings.defaultModel,
+          "ag/gemini-3.8-flash",
+          "ag/gemini-3.8-flash-high",
+          "ag/gemini-3.7-flash-high",
+          "ag/claude-sonnet-4-6",
+          "kimi/kimi-k3",
+          "combo"
+        ].filter(Boolean),
+        activeModel: settings.defaultModel,
+        provider: settings.provider
+      });
+    }
+
+    const data = await resp.json();
+    let modelList = [];
+
+    if (Array.isArray(data)) {
+      modelList = data.map(m => typeof m === "string" ? m : m.id || m.name);
+    } else if (Array.isArray(data.data)) {
+      modelList = data.data.map(m => m.id || m.name);
+    } else if (Array.isArray(data.models)) {
+      modelList = data.models.map(m => m.name || m.id);
+    }
+
+    const uniqueModels = Array.from(new Set(modelList.filter(Boolean)));
+
+    res.json({
+      online: true,
+      models: uniqueModels,
+      activeModel: settings.defaultModel,
+      provider: settings.provider
+    });
+  } catch (err) {
+    res.json({
+      online: false,
+      error: err.name === "AbortError" ? "Bağlantı zaman aşımına uğradı (4s)" : err.message,
+      models: [
+        settings.defaultModel,
+        "ag/gemini-3.8-flash",
+        "ag/gemini-3.8-flash-high",
+        "ag/gemini-3.7-flash-high",
+        "ag/claude-sonnet-4-6",
+        "kimi/kimi-k3",
+        "combo"
+      ].filter(Boolean),
+      activeModel: settings.defaultModel,
+      provider: settings.provider
+    });
+  }
+});
+
+// Quick Model Select API
+app.post("/api/models/select", (req, res) => {
+  const { model, botId, applyToAll } = req.body;
+  if (!model) return res.status(400).json({ error: "model parametresi gereklidir." });
+  const result = store.updateModelSelection({ model, botId, applyToAll });
+  broadcast({ type: "settings_updated", settings: store.getSettings() });
+  broadcast({ type: "model_selected", model, botId, applyToAll, defaultModel: result.defaultModel });
+  if (applyToAll || botId) {
+    broadcast({ type: "bots_updated", bots: result.bots });
+  }
+  res.json({ success: true, ...result, settings: store.getSettings() });
 });
 
 // Active Tasks & Activity
@@ -183,6 +321,134 @@ app.delete("/api/sessions/:targetId/:sessionId", (req, res) => {
   res.json({ success });
 });
 
+// 5.2 Git Checkpoints & Rollback
+app.get("/api/git/checkpoints", (req, res) => {
+  const { targetId } = req.query;
+  res.json(store.getCheckpoints(targetId));
+});
+
+app.post("/api/git/checkpoint", async (req, res) => {
+  const { cwd, message, targetId } = req.body;
+  const workDir = cwd || store.getSettings().defaultCwd || process.cwd();
+  const cp = await createGitCheckpoint(workDir, message || "Kullanıcı Checkpoint'i");
+  if (cp.commitHash) {
+    const saved = store.addCheckpoint({
+      commitHash: cp.commitHash,
+      message: cp.message,
+      targetId: targetId || null
+    });
+    broadcast({ type: "checkpoint_created", checkpoint: saved });
+    return res.json(saved);
+  }
+  res.json(cp);
+});
+
+app.post("/api/git/rollback", async (req, res) => {
+  const { cwd, commitHash } = req.body;
+  const workDir = cwd || store.getSettings().defaultCwd || process.cwd();
+  const result = await rollbackGitCheckpoint(workDir, commitHash);
+  broadcast({ type: "git_rollback", result, commitHash });
+  res.json(result);
+});
+
+// 5.3 Kanban Tasks API
+app.get("/api/kanban", (req, res) => {
+  res.json(store.getKanbanTasks());
+});
+
+app.post("/api/kanban", (req, res) => {
+  const task = store.saveKanbanTask(req.body);
+  broadcast({ type: "kanban_updated", tasks: store.getKanbanTasks() });
+  res.json(task);
+});
+
+app.put("/api/kanban/:id", (req, res) => {
+  const updated = store.updateKanbanTask(req.params.id, req.body);
+  if (!updated) return res.status(404).json({ error: "Görev bulunamadı." });
+  broadcast({ type: "kanban_updated", tasks: store.getKanbanTasks() });
+  res.json(updated);
+});
+
+app.delete("/api/kanban/:id", (req, res) => {
+  const success = store.deleteKanbanTask(req.params.id);
+  broadcast({ type: "kanban_updated", tasks: store.getKanbanTasks() });
+  res.json({ success });
+});
+
+// 5.4 Approval Mode API
+app.get("/api/approval/mode", (req, res) => {
+  res.json({ mode: store.getApprovalMode() });
+});
+
+app.post("/api/approval/mode", (req, res) => {
+  const { mode } = req.body;
+  if (!["always", "dangerous", "yolo"].includes(mode)) {
+    return res.status(400).json({ error: "Geçersiz mod (always, dangerous, yolo)." });
+  }
+  store.setApprovalMode(mode);
+  broadcast({ type: "approval_mode_updated", mode });
+  res.json({ mode });
+});
+
+// 5.5 Token & Cost Stats API
+app.get("/api/stats/tokens", (req, res) => {
+  res.json(store.getTokenStats());
+});
+
+// 5.6 Workspace Tree & File API
+app.get("/api/workspace/tree", (req, res) => {
+  const targetDir = req.query.cwd || store.getSettings().defaultCwd || process.cwd();
+  try {
+    function readDirRecursive(dir, depth = 0) {
+      if (depth > 3) return [];
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      const results = [];
+      for (const entry of entries) {
+        if (entry.name.startsWith(".") && entry.name !== ".env.example") continue;
+        if (["node_modules", "build", ".dart_tool", "dist", ".git"].includes(entry.name)) continue;
+        const fullPath = path.join(dir, entry.name);
+        const relativePath = path.relative(targetDir, fullPath);
+        if (entry.isDirectory()) {
+          results.push({
+            name: entry.name,
+            path: relativePath,
+            type: "directory",
+            children: readDirRecursive(fullPath, depth + 1)
+          });
+        } else {
+          results.push({
+            name: entry.name,
+            path: relativePath,
+            type: "file"
+          });
+        }
+      }
+      return results;
+    }
+    const tree = readDirRecursive(targetDir);
+    res.json({ cwd: targetDir, tree });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/workspace/file", (req, res) => {
+  const targetDir = req.query.cwd || store.getSettings().defaultCwd || process.cwd();
+  const filePath = req.query.filePath;
+  if (!filePath) return res.status(400).json({ error: "filePath gereklidir." });
+  const resolved = path.resolve(targetDir, filePath);
+  if (!resolved.startsWith(targetDir)) {
+    return res.status(403).json({ error: "Dizin dışına erişim engellendi." });
+  }
+  try {
+    if (!fs.existsSync(resolved)) return res.status(404).json({ error: "Dosya bulunamadı." });
+    const content = fs.readFileSync(resolved, "utf8");
+    res.json({ filePath, content: content.slice(0, 50000) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // 6. Emergency Stop API
 app.post("/api/stop", (req, res) => {
   const { targetId } = req.body;
@@ -285,6 +551,25 @@ app.post("/api/chat", async (req, res) => {
     const respondingBot = botQueue.shift();
     rounds++;
 
+    // Otomatik Git Checkpoint: Ajan çalışmaya başlamadan önce anlık snapshot al
+    let checkpointData = null;
+    try {
+      const workDir = store.getSettings().defaultCwd || process.cwd();
+      const cpResult = await createGitCheckpoint(workDir, `${respondingBot.name} tur ${rounds} işlemine başladı`);
+      if (cpResult && cpResult.commitHash) {
+        checkpointData = store.addCheckpoint({
+          commitHash: cpResult.commitHash,
+          message: cpResult.message,
+          targetId,
+          botId: respondingBot.id,
+          rounds
+        });
+        broadcast({ type: "checkpoint_created", checkpoint: checkpointData });
+      }
+    } catch (e) {
+      console.warn("Otomatik checkpoint alınamadı:", e.message);
+    }
+
     // 1. Canlı Bot Mesajını ANINDA oluştur ve veritabanına kaydet (Sayfa yenilense bile görünür!)
     const botMsg = store.addMessage(targetId, {
       role: "assistant",
@@ -294,6 +579,7 @@ app.post("/api/chat", async (req, res) => {
       botColor: respondingBot.color,
       content: "",
       isLive: true,
+      checkpointHash: checkpointData ? checkpointData.commitHash : null,
       currentStatus: "İşlem planlanıyor ve başlatılıyor...",
       toolEvents: []
     });
@@ -580,11 +866,13 @@ if (fs.existsSync(distPath)) {
   });
 }
 
-server.listen(PORT, () => {
+const HOST = process.env.HOST || "127.0.0.1";
+
+server.listen(PORT, HOST, () => {
   console.log(`===================================================`);
   console.log(`🚀 Team AI Sunucusu Başarıyla Başlatıldı!`);
-  console.log(`👉 Web Arayüzü: http://localhost:${PORT}`);
-  console.log(`👉 WebSocket: ws://localhost:${PORT}/ws`);
+  console.log(`👉 Web Arayüzü: http://${HOST}:${PORT}`);
+  console.log(`👉 WebSocket: ws://${HOST}:${PORT}/ws`);
   console.log(`👉 Model Sağlayıcı: ${store.getSettings().apiBaseUrl} (${store.getSettings().defaultModel})`);
   console.log(`===================================================`);
 });

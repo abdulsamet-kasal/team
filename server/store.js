@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { defaultBots, defaultRooms, defaultSettings } from "./defaultData.js";
+import { defaultBots, defaultRooms, defaultSettings, providerPresets } from "./defaultData.js";
 
 const DATA_DIR = path.resolve("./data");
 const STATE_FILE = path.join(DATA_DIR, "team_state.json");
@@ -13,7 +13,11 @@ class Store {
       rooms: [...defaultRooms],
       messages: {}, // targetId -> Array of messages (backward-compat)
       sessions: {}, // targetId -> Array of session objects
-      activeSessions: {} // targetId -> active sessionId
+      activeSessions: {}, // targetId -> active sessionId
+      kanban: [], // Array of kanban tasks
+      tokenStats: {}, // botId -> { promptTokens, completionTokens, totalTokens }
+      approvalMode: "dangerous", // 'always' | 'dangerous' | 'yolo'
+      checkpoints: [] // Array of { id, commitHash, message, timestamp, targetId }
     };
     this.activeTasks = {}; // targetId -> active task object
     this.lastActivity = {
@@ -40,8 +44,56 @@ class Store {
           rooms: Array.isArray(loaded.rooms) && loaded.rooms.length ? loaded.rooms : [...defaultRooms],
           messages: loaded.messages || {},
           sessions: loaded.sessions || {},
-          activeSessions: loaded.activeSessions || {}
+          activeSessions: loaded.activeSessions || {},
+          kanban: Array.isArray(loaded.kanban) ? loaded.kanban : [],
+          tokenStats: loaded.tokenStats || {},
+          approvalMode: loaded.approvalMode || "dangerous",
+          checkpoints: Array.isArray(loaded.checkpoints) ? loaded.checkpoints : []
         };
+
+        // Sağlayıcı (Provider) Başlatma ve 9Router Uyumluluğu
+        if (!this.state.settings.provider) {
+          this.state.settings.provider = "9router";
+        }
+        if (!this.state.settings.savedProviders) {
+          this.state.settings.savedProviders = {};
+        }
+        if (!this.state.settings.savedProviders["9router"]) {
+          this.state.settings.savedProviders["9router"] = {
+            id: "9router",
+            name: "9Router (Yerel)",
+            apiBaseUrl: this.state.settings.apiBaseUrl || "http://localhost:20128/v1",
+            apiKey: this.state.settings.apiKey || "sk-51adfc21050c0974-g8gj4b-3e65bca4",
+            defaultModel: this.state.settings.defaultModel || "ag/gemini-3.8-flash"
+          };
+        }
+
+        // Bot Senkronizasyonu & Becerileri Güncelleme
+        const existingBotIds = new Set(this.state.bots.map(b => b.id));
+        for (const defBot of defaultBots) {
+          if (!existingBotIds.has(defBot.id)) {
+            this.state.bots.push(defBot);
+          } else {
+            const idx = this.state.bots.findIndex(b => b.id === defBot.id);
+            if (idx >= 0) {
+              this.state.bots[idx] = {
+                ...this.state.bots[idx],
+                soul: defBot.soul,
+                title: defBot.title,
+                description: defBot.description,
+                tools: defBot.tools,
+                avatar: defBot.avatar,
+                color: defBot.color
+              };
+            }
+          }
+        }
+
+        // Ana oda (room-all) üye senkronizasyonu
+        const mainRoom = this.state.rooms.find(r => r.id === "room-all");
+        if (mainRoom) {
+          mainRoom.memberBotIds = this.state.bots.map(b => b.id);
+        }
 
         // Otomatik Migrasyon: Mevcut mesajları ilk oturuma aktar
         for (const [targetId, msgs] of Object.entries(this.state.messages || {})) {
@@ -57,6 +109,7 @@ class Store {
             this.state.activeSessions[targetId] = defaultId;
           }
         }
+        this.save();
       } else {
         this.save();
       }
@@ -79,8 +132,107 @@ class Store {
 
   updateSettings(patch) {
     this.state.settings = { ...this.state.settings, ...patch };
+    const providerId = this.state.settings.provider || "9router";
+    if (!this.state.settings.savedProviders) this.state.settings.savedProviders = {};
+    this.state.settings.savedProviders[providerId] = {
+      ...(this.state.settings.savedProviders[providerId] || {}),
+      id: providerId,
+      apiBaseUrl: this.state.settings.apiBaseUrl,
+      apiKey: this.state.settings.apiKey,
+      defaultModel: this.state.settings.defaultModel
+    };
     this.save();
     return this.state.settings;
+  }
+
+  getProviders() {
+    const saved = this.state.settings.savedProviders || {};
+    const currentProvider = this.state.settings.provider || "9router";
+
+    return providerPresets.map(preset => {
+      const savedConfig = saved[preset.id] || {};
+      return {
+        ...preset,
+        ...savedConfig,
+        isActive: preset.id === currentProvider
+      };
+    });
+  }
+
+  switchProvider(providerId, overrides = {}) {
+    const preset = providerPresets.find(p => p.id === providerId) || providerPresets[0];
+    const saved = (this.state.settings.savedProviders && this.state.settings.savedProviders[providerId]) || {};
+
+    const apiBaseUrl = overrides.apiBaseUrl || saved.apiBaseUrl || preset.apiBaseUrl;
+    const apiKey = overrides.apiKey !== undefined ? overrides.apiKey : (saved.apiKey !== undefined ? saved.apiKey : preset.apiKey);
+    const defaultModel = overrides.defaultModel || saved.defaultModel || preset.defaultModel;
+
+    this.state.settings.provider = providerId;
+    this.state.settings.apiBaseUrl = apiBaseUrl;
+    this.state.settings.apiKey = apiKey;
+    this.state.settings.defaultModel = defaultModel;
+
+    if (!this.state.settings.savedProviders) this.state.settings.savedProviders = {};
+    this.state.settings.savedProviders[providerId] = {
+      id: providerId,
+      name: preset.name,
+      apiBaseUrl,
+      apiKey,
+      defaultModel
+    };
+
+    this.save();
+    return {
+      settings: this.state.settings,
+      provider: this.state.settings.savedProviders[providerId]
+    };
+  }
+
+  saveProviderConfig(providerId, config) {
+    const preset = providerPresets.find(p => p.id === providerId);
+    if (!this.state.settings.savedProviders) this.state.settings.savedProviders = {};
+    this.state.settings.savedProviders[providerId] = {
+      ...(this.state.settings.savedProviders[providerId] || {}),
+      name: preset?.name || providerId,
+      ...config,
+      id: providerId
+    };
+    if (this.state.settings.provider === providerId) {
+      if (config.apiBaseUrl) this.state.settings.apiBaseUrl = config.apiBaseUrl;
+      if (config.apiKey !== undefined) this.state.settings.apiKey = config.apiKey;
+      if (config.defaultModel) this.state.settings.defaultModel = config.defaultModel;
+    }
+    this.save();
+    return this.state.settings.savedProviders[providerId];
+  }
+
+  updateModelSelection({ model, botId, applyToAll = false }) {
+    if (applyToAll) {
+      this.state.settings.defaultModel = model;
+      const currentProvider = this.state.settings.provider || "9router";
+      if (this.state.settings.savedProviders?.[currentProvider]) {
+        this.state.settings.savedProviders[currentProvider].defaultModel = model;
+      }
+      this.state.bots.forEach(b => {
+        b.model = model;
+      });
+    } else if (botId) {
+      const bot = this.state.bots.find(b => b.id === botId);
+      if (bot) {
+        bot.model = model;
+      }
+    } else {
+      this.state.settings.defaultModel = model;
+      const currentProvider = this.state.settings.provider || "9router";
+      if (this.state.settings.savedProviders?.[currentProvider]) {
+        this.state.settings.savedProviders[currentProvider].defaultModel = model;
+      }
+    }
+    this.save();
+    return {
+      defaultModel: this.state.settings.defaultModel,
+      bots: this.state.bots
+    };
   }
 
   getBots() {
@@ -336,6 +488,101 @@ class Store {
   clearMessages(targetId) {
     this.state.messages[targetId] = [];
     this.save();
+  }
+
+  // Kanban Tasks
+  getKanbanTasks() {
+    return this.state.kanban || [];
+  }
+
+  saveKanbanTask(task) {
+    const newTask = {
+      id: "kb-" + Date.now() + "-" + Math.random().toString(36).substring(2, 6),
+      title: task.title || "Yeni Görev",
+      description: task.description || "",
+      status: task.status || "todo", // todo, in_progress, test, done
+      assignedTo: task.assignedTo || "bot-lead",
+      priority: task.priority || "medium",
+      createdAt: new Date().toISOString()
+    };
+    if (!this.state.kanban) this.state.kanban = [];
+    this.state.kanban.unshift(newTask);
+    this.save();
+    return newTask;
+  }
+
+  updateKanbanTask(id, patch) {
+    if (!this.state.kanban) return null;
+    const idx = this.state.kanban.findIndex(t => t.id === id);
+    if (idx >= 0) {
+      this.state.kanban[idx] = { ...this.state.kanban[idx], ...patch, updatedAt: new Date().toISOString() };
+      this.save();
+      return this.state.kanban[idx];
+    }
+    return null;
+  }
+
+  deleteKanbanTask(id) {
+    if (!this.state.kanban) return false;
+    this.state.kanban = this.state.kanban.filter(t => t.id !== id);
+    this.save();
+    return true;
+  }
+
+  // Approval Mode
+  getApprovalMode() {
+    return this.state.approvalMode || "dangerous";
+  }
+
+  setApprovalMode(mode) {
+    this.state.approvalMode = mode;
+    this.save();
+    return this.state.approvalMode;
+  }
+
+  // Checkpoints
+  getCheckpoints(targetId) {
+    if (!targetId) return this.state.checkpoints || [];
+    return (this.state.checkpoints || []).filter(c => !c.targetId || c.targetId === targetId);
+  }
+
+  addCheckpoint(checkpoint) {
+    if (!this.state.checkpoints) this.state.checkpoints = [];
+    const item = {
+      id: "cp-" + Date.now(),
+      timestamp: new Date().toISOString(),
+      ...checkpoint
+    };
+    this.state.checkpoints.unshift(item);
+    if (this.state.checkpoints.length > 30) {
+      this.state.checkpoints = this.state.checkpoints.slice(0, 30);
+    }
+    this.save();
+    return item;
+  }
+
+  // Token Stats
+  recordTokenUsage(botId, promptTokens = 0, completionTokens = 0) {
+    if (!this.state.tokenStats) this.state.tokenStats = {};
+    if (!this.state.tokenStats[botId]) {
+      this.state.tokenStats[botId] = {
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        calls: 0
+      };
+    }
+    const cur = this.state.tokenStats[botId];
+    cur.promptTokens += promptTokens;
+    cur.completionTokens += completionTokens;
+    cur.totalTokens += (promptTokens + completionTokens);
+    cur.calls += 1;
+    this.save();
+    return cur;
+  }
+
+  getTokenStats() {
+    return this.state.tokenStats || {};
   }
 }
 
