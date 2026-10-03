@@ -79,13 +79,23 @@ export default function SettingsModal({ isOpen, onClose, settings, onSave }) {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-zinc-400 mb-1 font-medium">Varsayılan Model</label>
+              <select
+                value={formData.defaultModel || "ag/gemini-3.8-flash"}
+                onChange={e => setFormData({ ...formData, defaultModel: e.target.value })}
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-zinc-100 font-mono text-xs focus:outline-none focus:border-indigo-500 mb-1.5"
+              >
+                <option value="ag/gemini-3.8-flash">⚡ Gemini 3.8 Flash (Antigravity)</option>
+                <option value="ag/gemini-3.8-flash-high">🧠 Gemini 3.8 Flash High (Antigravity)</option>
+                <option value="ag/gemini-3.7-flash-high">⚡ Gemini 3.7 Flash High</option>
+                <option value="combo">🔄 9Router Combo (Otomatik)</option>
+              </select>
               <input
                 type="text"
                 required
                 value={formData.defaultModel || ""}
                 onChange={e => setFormData({ ...formData, defaultModel: e.target.value })}
-                placeholder="combo"
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-zinc-100 font-mono focus:outline-none focus:border-indigo-500"
+                placeholder="ag/gemini-3.8-flash"
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-zinc-400 font-mono text-[11px] focus:outline-none focus:border-indigo-500"
               />
             </div>
             <div>
