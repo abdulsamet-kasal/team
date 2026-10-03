@@ -7,8 +7,8 @@ export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, 
     return { reply: "🛑 İşlem kullanıcı tarafından acilen durduruldu.", aborted: true, isGoalCompleted: false };
   }
 
-  if (depth > 8) {
-    return { reply: "Maksimum özyineleme derinliğine ulaşıldı. Görev durduruldu.", aborted: false, isGoalCompleted: false };
+  if (depth > 40) {
+    return { reply: "Maksimum özyineleme derinliğine (40 adım) ulaşıldı. Görev durduruldu.", aborted: false, isGoalCompleted: false };
   }
 
   const bot = store.getBot(botId);
@@ -33,25 +33,59 @@ export async function runAgentTurn(botId, history = [], { onChunk, onToolEvent, 
     content: `${bot.soul}\n\n${memoryManager.getMemoryPrompt()}\n\nÇalışma Dizini: ${cwd || settings.defaultCwd}\nSistem: Linux (CachyOS)\nKullanıcı: Samet Kasal (GitHub: abdulsamet-kasal)`
   };
 
-  // Multimodal (Görsel) desteği: Eğer kullanıcı görsel yüklediyse OpenAI/Gemini formatına dönüştür
+  // Multimodal (Görsel) desteği ve Akıllı Rol Eşleme:
+  // Eğer bir mesaj başka bir bota aitse, Gemini'nin "model turn ile bitemez" kuralını ihlal etmemek
+  // ve ekip işbirliğini sağlamak için o mesajı kullanıcı (ekip arkadaşı girdisi) olarak formatla.
   const formattedHistory = history.map(m => {
-    if (m.images && Array.isArray(m.images) && m.images.length > 0) {
-      return {
-        role: m.role,
-        content: [
-          { type: "text", text: m.content || "" },
-          ...m.images.map(img => ({
-            type: "image_url",
-            image_url: { url: img }
-          }))
-        ]
-      };
+    let effectiveRole = m.role;
+    let effectiveContent = m.content || "";
+
+    if (m.role === "assistant") {
+      if (m.botId && m.botId !== bot.id) {
+        effectiveRole = "user";
+        effectiveContent = `[${m.botName || "Ekip Arkadaşı"}]: ${effectiveContent}`;
+      } else {
+        effectiveRole = "assistant";
+      }
+    } else if (m.role === "system") {
+      effectiveRole = "user";
     }
-    return {
-      role: m.role,
-      content: m.content || ""
+
+    const mObj = {
+      role: effectiveRole,
+      content: effectiveContent
     };
+
+    if (m.tool_calls) mObj.tool_calls = m.tool_calls;
+    if (m.tool_call_id) mObj.tool_call_id = m.tool_call_id;
+    if (m.name) mObj.name = m.name;
+
+    if (m.images && Array.isArray(m.images) && m.images.length > 0) {
+      mObj.content = [
+        { type: "text", text: effectiveContent },
+        ...m.images.map(img => ({
+          type: "image_url",
+          image_url: { url: img }
+        }))
+      ];
+    }
+
+    return mObj;
   });
+
+  // Gemini Kuralı Garantisi: Gemini istekleri ASLA normal bir model/assistant cevabıyla bitemez!
+  // Eğer son mesaj araç çağırmayan bir assistant ise, devam talimatı ekle.
+  if (formattedHistory.length === 0) {
+    formattedHistory.push({ role: "user", content: "Başlayabilirsin." });
+  } else {
+    const lastMsg = formattedHistory[formattedHistory.length - 1];
+    if (lastMsg.role === "assistant" && (!lastMsg.tool_calls || !lastMsg.tool_calls.length)) {
+      formattedHistory.push({
+        role: "user",
+        content: "Lütfen göreve devam et, bir sonraki adımı gerçekleştir veya sonuçları bildir."
+      });
+    }
+  }
 
   const messagesPayload = [systemMessage, ...formattedHistory];
 

@@ -16,16 +16,31 @@ export function killAllActiveCommands() {
   return count;
 }
 
-export function executeCommand(command, { cwd, onOutput, timeoutMs = 60000 } = {}) {
+export function executeCommand(command, { cwd, onOutput, timeoutMs = 120000 } = {}) {
   return new Promise((resolve) => {
     const startTime = Date.now();
     let stdout = "";
     let stderr = "";
     let isSettled = false;
 
+    const homeDir = process.env.HOME || "/home/samet";
+    const customPaths = [
+      `${homeDir}/development/flutter/bin`,
+      `${homeDir}/.local/bin`,
+      `${homeDir}/Android/Sdk/platform-tools`,
+      `${homeDir}/Android/Sdk/cmdline-tools/latest/bin`,
+      `${homeDir}/Android/Sdk/emulator`
+    ];
+    const envPath = `${customPaths.join(":")}:${process.env.PATH || ""}`;
+
     const child = spawn("bash", ["-c", command], {
       cwd: cwd || process.cwd(),
-      env: { ...process.env, TERM: "xterm-256color" }
+      env: {
+        ...process.env,
+        PATH: envPath,
+        ANDROID_HOME: `${homeDir}/Android/Sdk`,
+        TERM: "xterm-256color"
+      }
     });
 
     activeProcesses.add(child);
