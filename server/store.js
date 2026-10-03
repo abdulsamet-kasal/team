@@ -14,6 +14,13 @@ class Store {
       messages: {} // targetId -> Array of messages
     };
     this.activeTasks = {}; // targetId -> active task object
+    this.lastActivity = {
+      botName: "Yazılım Ekibi",
+      botAvatar: "👥",
+      currentStatus: "Ekip hazır ve komut almaya hazır.",
+      cwd: "/home/samet/Projeler/team",
+      updatedAt: new Date().toISOString()
+    };
     this.init();
   }
 
@@ -155,6 +162,18 @@ class Store {
 
   getAllActiveTasks() {
     return this.activeTasks;
+  }
+
+  setLastActivity(activity) {
+    this.lastActivity = {
+      ...this.lastActivity,
+      ...activity,
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  getLastActivity() {
+    return this.lastActivity;
   }
 
   clearMessages(targetId) {
