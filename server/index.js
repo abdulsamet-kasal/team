@@ -1,6 +1,7 @@
 import http from "node:http";
 import path from "node:path";
 import fs from "node:fs";
+import net from "node:net";
 import express from "express";
 import cors from "cors";
 import { WebSocketServer, WebSocket } from "ws";
@@ -55,6 +56,15 @@ function broadcast(data) {
     }
   }
 }
+
+// Store olaylarını WebSocket üzerinden canlı yayınla
+store.on("kanban_updated", (tasks) => {
+  broadcast({ type: "kanban_updated", tasks });
+});
+
+store.on("rules_updated", (rules) => {
+  broadcast({ type: "rules_updated", rules });
+});
 
 // REST API Endpoints
 
@@ -393,6 +403,66 @@ app.post("/api/approval/mode", (req, res) => {
 // 5.5 Token & Cost Stats API
 app.get("/api/stats/tokens", (req, res) => {
   res.json(store.getTokenStats());
+});
+
+// 5.6 Rules Engine API
+app.get("/api/rules", (req, res) => {
+  res.json(store.getRules());
+});
+
+app.post("/api/rules", (req, res) => {
+  const { title, content, category, enabled } = req.body;
+  if (!content) return res.status(400).json({ error: "Kural içeriği zorunludur." });
+  const created = store.addRule({ title, content, category, enabled });
+  broadcast({ type: "rules_updated", rules: store.getRules() });
+  res.json(created);
+});
+
+app.put("/api/rules/:id", (req, res) => {
+  const updated = store.updateRule(req.params.id, req.body);
+  if (!updated) return res.status(404).json({ error: "Kural bulunamadı." });
+  broadcast({ type: "rules_updated", rules: store.getRules() });
+  res.json(updated);
+});
+
+app.delete("/api/rules/:id", (req, res) => {
+  const deleted = store.deleteRule(req.params.id);
+  broadcast({ type: "rules_updated", rules: store.getRules() });
+  res.json({ success: deleted });
+});
+
+// 5.7 Live Preview Dev Server Checker API
+app.get("/api/preview/ports", async (req, res) => {
+  const commonPorts = [3000, 5173, 8080, 8000, 4173, 5000, 3001, 8081];
+  const checkPort = (port) => {
+    return new Promise((resolve) => {
+      const socket = new net.Socket();
+      socket.setTimeout(300);
+      socket.on("connect", () => {
+        socket.destroy();
+        resolve({ port, active: true });
+      });
+      socket.on("timeout", () => {
+        socket.destroy();
+        resolve({ port, active: false });
+      });
+      socket.on("error", () => {
+        socket.destroy();
+        resolve({ port, active: false });
+      });
+      socket.connect(port, "127.0.0.1");
+    });
+  };
+
+  try {
+    const statuses = await Promise.all(commonPorts.map(checkPort));
+    res.json({
+      activePorts: statuses.filter(s => s.active).map(s => s.port),
+      ports: statuses
+    });
+  } catch (err) {
+    res.json({ activePorts: [3000], ports: [] });
+  }
 });
 
 // 5.6 Workspace Tree & File API
@@ -752,36 +822,84 @@ app.post("/api/chat", async (req, res) => {
         lastActivity: store.getLastActivity()
       });
 
-      // Otonom Takım İletişimi: Bot yanıtında başka bir ekip arkadaşını etiketlediyse zincire ekle
+      // 1. Otonom Takım İletişimi: Yanıtta etiketlenen (@botadı / @rol) veya araçlarda delege edilen botlar
       if (isRoom && rounds < maxRounds && !isGoalCompleted) {
         const lowerReply = reply.toLowerCase();
+        
+        // A. Araç çağrılarında delege edilen veya görev atanan botlar
+        for (const ev of accumulatedToolEvents) {
+          if (ev.toolName === "delegate_to_bot" || ev.toolName === "create_kanban_task") {
+            try {
+              const parsed = JSON.parse(ev.args || "{}");
+              const targetBotId = parsed.targetBotId || parsed.assignedTo;
+              if (targetBotId && targetBotId !== respondingBot.id) {
+                const assignedBot = allBots.find(b => b.id === targetBotId);
+                if (assignedBot && room.memberBotIds.includes(assignedBot.id) && !botQueue.some(b => b.id === assignedBot.id)) {
+                  botQueue.push(assignedBot);
+                }
+              }
+            } catch (e) {}
+          }
+        }
+
+        // B. Metin içinde @ ile doğrudan etiketlenen botlar
         for (const candidate of allBots) {
           if (
             room.memberBotIds.includes(candidate.id) &&
             candidate.id !== respondingBot.id &&
             !botQueue.some(b => b.id === candidate.id) &&
-            (lowerReply.includes(`@${candidate.name.toLowerCase()}`) || lowerReply.includes(`@${candidate.role.toLowerCase()}`))
+            (lowerReply.includes(`@${candidate.name.toLowerCase()}`) || lowerReply.includes(`@${candidate.role.toLowerCase()}`) || lowerReply.includes(`@${candidate.id.toLowerCase()}`))
           ) {
             botQueue.push(candidate);
           }
         }
       }
 
-      // Kesintisiz Görev & Goal Modu Devamı:
-      // Eğer hedef henüz bitmediyse veya bot 25 adım ara aşamaya ulaştıysa (needsContinuation),
-      // görevi durdurma! Kontrolü bir sonraki tura aktararak otonom devam et.
-      if (!isGoalCompleted && (result.needsContinuation || goalMode) && rounds < maxRounds && !controller.signal.aborted) {
+      // 2. Akıllı Görev Dağıtıcısı & Kesintisiz Görev / Goal Modu Devamı:
+      // Eğer hedef henüz bitmediyse veya devam gerekiyorsa akıllıca sıradaki botu belirle
+      if (!isGoalCompleted && (result.needsContinuation || goalMode || botQueue.length > 0) && rounds < maxRounds && !controller.signal.aborted) {
         if (!isRoom) {
           // Bireysel bot sohbetinde aynı bot göreve devam eder
           if (botQueue.length === 0) {
             botQueue.push(respondingBot);
           }
         } else if (botQueue.length === 0) {
-          // Oda sohbetinde denetleyici (supervisor) veya aktif bot devreye girer
-          const supervisor = (rounds % 2 === 0) 
-            ? (allBots.find(b => b.id === "bot-qa") || allBots[0])
-            : (allBots.find(b => b.isChief || b.id === "bot-lead") || respondingBot);
-          botQueue.push(supervisor);
+          // Oda sohbetinde KANBAN ve MİMARİ odaklı akıllı yönlendirme:
+          const kanbanTasks = store.getKanbanTasks();
+          let nextBot = null;
+
+          // A. Devam eden (in_progress) veya yapılacak (todo) bir görev varsa, atanan uzmana pasla
+          const pendingTask = kanbanTasks.find(t => t.status === "in_progress") || kanbanTasks.find(t => t.status === "todo");
+          if (pendingTask && pendingTask.assignedTo) {
+            nextBot = allBots.find(b => b.id === pendingTask.assignedTo && b.id !== respondingBot.id);
+          }
+
+          // B. Test bekleyen bir görev varsa, Tester veya QA uzmanını devreye al
+          if (!nextBot) {
+            const testTask = kanbanTasks.find(t => t.status === "test");
+            if (testTask) {
+              nextBot = allBots.find(b => b.id === "bot-tester") || allBots.find(b => b.id === "bot-qa");
+            }
+          }
+
+          // C. Önceki bot geliştirme yaptıysa (dosya yazdıysa veya düzenlediyse) ve henüz test edilmediyse Tester devreye girsin
+          if (!nextBot && accumulatedToolEvents.some(e => e.toolName === "write_file" || e.toolName === "edit_file") && respondingBot.id !== "bot-tester" && respondingBot.id !== "bot-qa") {
+            nextBot = allBots.find(b => b.id === "bot-tester") || allBots.find(b => b.id === "bot-qa");
+          }
+
+          // D. Eğer mevcut botun daha yapacak işi varsa (needsContinuation), kendisi devam etsin
+          if (!nextBot && result.needsContinuation) {
+            nextBot = respondingBot;
+          }
+
+          // E. Tüm görevler yapıldıysa veya genel koordinasyon gerekiyorsa Takım Lideri (Lead) kontrolü ele alsın
+          if (!nextBot) {
+            nextBot = allBots.find(b => b.isChief || b.id === "bot-lead") || respondingBot;
+          }
+
+          if (nextBot && room.memberBotIds.includes(nextBot.id)) {
+            botQueue.push(nextBot);
+          }
         }
       }
     } catch (err) {

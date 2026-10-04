@@ -22,13 +22,16 @@ import {
   Sidebar as SidebarIcon,
   Brain,
   MessageSquareQuote,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Building2,
+  MessageSquare
 } from "lucide-react";
 import Avatar from "./ui/Avatar";
 import Badge from "./ui/Badge";
 import Button from "./ui/Button";
 import Popover from "./ui/Popover";
 import ModelSelector from "./ModelSelector";
+import LiveOfficeWarRoom from "./LiveOfficeWarRoom";
 
 export default function ChatArea({
   target,
@@ -55,8 +58,12 @@ export default function ChatArea({
   settings = {},
   onModelSelect,
   onProviderSwitch,
-  onOpenSettings
+  onOpenSettings,
+  kanbanTasks = [],
+  onOpenKanban,
+  onSelectTarget
 }) {
+  const [viewMode, setViewMode] = useState("chat"); // 'chat' | 'office'
   const [input, setInput] = useState("");
   const [selectedImages, setSelectedImages] = useState([]);
   const [goalMode, setGoalMode] = useState(false);
@@ -74,6 +81,9 @@ export default function ChatArea({
   const fileInputRef = useRef(null);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) || sessions[0];
+  const inProgressTasks = kanbanTasks.filter((t) => t.status === "in_progress");
+  const todoTasks = kanbanTasks.filter((t) => t.status === "todo");
+  const doneTasks = kanbanTasks.filter((t) => t.status === "done");
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -376,7 +386,7 @@ export default function ChatArea({
               <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-mono truncate animate-pulse">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
                 <span className="font-semibold">{activeTask.botName}:</span>
-                <span className="truncate max-w-[200px]">{activeTask.currentStatus || "İşlemde..."}</span>
+                <span className="truncate max-w-[180px]">{activeTask.currentStatus || "İşlemde..."}</span>
               </span>
             ) : (
               <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 text-[10px] font-mono">
@@ -384,11 +394,68 @@ export default function ChatArea({
                 EKİP HAZIR
               </span>
             )}
+
+            {/* Hızlı Görev Panosu Özeti */}
+            {onOpenKanban && kanbanTasks.length > 0 && (
+              <button
+                type="button"
+                onClick={onOpenKanban}
+                title="Görev Panosunu Aç"
+                className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/25 text-[10px] font-mono transition-colors cursor-pointer ml-1.5 shrink-0"
+              >
+                <span>📋 Pano:</span>
+                {inProgressTasks.length > 0 && (
+                  <span className="text-amber-400 font-semibold">{inProgressTasks.length} sürüyor</span>
+                )}
+                {todoTasks.length > 0 && (
+                  <span className="text-sky-400">{todoTasks.length} bekliyor</span>
+                )}
+                {doneTasks.length > 0 && (
+                  <span className="text-emerald-400">{doneTasks.length} bitti</span>
+                )}
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Sağ Grup: Hafıza Popover + Arama + Markdown Dışa Aktar + Acil Durdur + Sağ Panel Toggle */}
+        {/* Sağ Grup: Görünüm Seçici (Sohbet / Canlı Ofis) + Hafıza Popover + Arama + Markdown Dışa Aktar + Acil Durdur + Sağ Panel Toggle */}
         <div className="flex items-center gap-1.5 shrink-0">
+          {/* Görünüm Seçici */}
+          <div className="flex items-center bg-[var(--bg-surface-elevated)] p-0.5 rounded-lg border border-[var(--border-subtle)] text-[11px] font-mono mr-0.5 sm:mr-1">
+            <button
+              type="button"
+              onClick={() => setViewMode("chat")}
+              className={`flex items-center gap-1 px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
+                viewMode === "chat"
+                  ? "bg-purple-600 text-white font-medium shadow-xs"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              }`}
+              title="Mesajlar ve Sohbet Akışı"
+            >
+              <MessageSquare className="w-3 h-3" />
+              <span className="hidden sm:inline">Sohbet</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("office")}
+              className={`flex items-center gap-1 px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
+                viewMode === "office"
+                  ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-medium shadow-xs"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              }`}
+              title="8 Ajanlı Canlı Ofis ve İletişim Ağı (War Room)"
+            >
+              <Building2 className="w-3 h-3 text-amber-300" />
+              <span className="hidden sm:inline">Canlı Ofis</span>
+              {(activeTask || isProcessing) && (
+                <span className="relative flex h-2 w-2 ml-0.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
+                </span>
+              )}
+            </button>
+          </div>
+
           {/* Sıkıştırılmış Hafıza Rozeti & Popover */}
           <Popover
             placement="bottom-end"
@@ -540,30 +607,122 @@ export default function ChatArea({
         </div>
       )}
 
-      {/* 2. MESAJLAR AKIŞI */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {filteredMessages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-[var(--text-tertiary)] space-y-2">
-            <div className="w-12 h-12 rounded-2xl bg-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] flex items-center justify-center text-xl">
-              {target.avatar || "💬"}
+      {/* CANLI EKİP VE İŞLEM KOMUTA MERKEZİ (Mission Control Deck - Yalnızca Sohbet Modunda) */}
+      {viewMode === "chat" && (activeTask || isProcessing) && (
+        <div className="mx-3 sm:mx-4 my-2 p-3 rounded-2xl bg-[var(--bg-surface-elevated)] border border-purple-500/30 shadow-lg backdrop-blur-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shrink-0 animate-in fade-in slide-in-from-top-2 duration-200">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="relative shrink-0">
+              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-purple-500/20 to-purple-800/30 border border-purple-500/40 flex items-center justify-center text-xl shadow-inner">
+                {activeTask?.botAvatar || target?.avatar || "⚡"}
+              </div>
+              <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-emerald-500 border-2 border-[var(--bg-surface-elevated)]"></span>
+              </span>
             </div>
-            <p className="text-xs font-medium text-[var(--text-secondary)]">
-              {searchQuery ? `"${searchQuery}" ile eşleşen mesaj bulunamadı.` : `Henüz mesaj yok. ${target.name} ekibine bir görev verin.`}
-            </p>
+
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-bold text-[var(--text-primary)] text-xs">
+                  {activeTask?.botName || target?.name || "Ajan"}
+                </span>
+                <span className="px-1.5 py-0.5 rounded-md bg-purple-500/20 text-purple-300 font-mono text-[10px] font-medium border border-purple-500/30">
+                  Tur {activeTask?.rounds || 1}/{activeTask?.maxRounds || 25}
+                </span>
+                {activeTask?.goalMode && (
+                  <span className="px-1.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 font-mono text-[10px] font-medium border border-amber-500/30 flex items-center gap-1">
+                    <Target className="w-2.5 h-2.5 text-amber-400" />
+                    Goal Modu
+                  </span>
+                )}
+                {activeTask?.activeTool && (
+                  <span className="px-1.5 py-0.5 rounded-md bg-sky-500/15 text-sky-300 font-mono text-[10px] border border-sky-500/25">
+                    {activeTask.activeTool}
+                  </span>
+                )}
+              </div>
+
+              <div className="text-[11px] text-[var(--text-secondary)] font-mono truncate mt-1 flex items-center gap-1.5">
+                <Loader2 className="w-3 h-3 animate-spin text-purple-400 shrink-0" />
+                <span className="truncate">{activeTask?.currentStatus || "İşlem planlanıyor ve icra ediliyor..."}</span>
+              </div>
+            </div>
           </div>
-        ) : (
-          filteredMessages.map((msg) => (
-            <MessageItem
-              key={msg.id}
-              message={msg}
-              onRollback={onRollback}
-              onQuoteReply={(m) => setQuotedMessage(m)}
-              searchHighlight={searchQuery}
-            />
-          ))
-        )}
-        <div ref={messagesEndRef} />
-      </div>
+
+          <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+            {onOpenKanban && kanbanTasks.length > 0 && (
+              <button
+                type="button"
+                onClick={onOpenKanban}
+                className="px-2.5 py-1 rounded-xl bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/25 text-purple-300 text-[11px] font-mono transition-colors cursor-pointer flex items-center gap-1"
+                title="Görev Panosunu Aç"
+              >
+                <span>📋 Pano</span>
+                <span className="text-[10px] text-amber-400">({inProgressTasks.length})</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={onEmergencyStop}
+              className="px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/40 text-rose-300 text-[11px] font-medium transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+              title="İşlemi Acil Durdur"
+            >
+              <Octagon className="w-3.5 h-3.5 text-rose-400" />
+              <span>Durdur</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 2. MESAJLAR AKIŞI VEYA CANLI OFİS (WAR ROOM) */}
+      {viewMode === "office" ? (
+        <div className="flex-1 overflow-hidden relative flex flex-col">
+          <LiveOfficeWarRoom
+            bots={allBots}
+            activeTask={activeTask}
+            activeToolEvent={activeToolEvent}
+            kanbanTasks={kanbanTasks}
+            messages={messages}
+            onSelectBot={(botId) => {
+              if (onSelectTarget) {
+                onSelectTarget(botId);
+              } else {
+                const found = allBots.find((b) => b.id === botId);
+                if (found) {
+                  setInput((prev) => `@${found.name} ` + prev);
+                  textareaRef.current?.focus();
+                }
+              }
+            }}
+            onSendMessage={onSendMessage}
+          />
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {filteredMessages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-[var(--text-tertiary)] space-y-2">
+              <div className="w-12 h-12 rounded-2xl bg-[var(--bg-surface-elevated)] border border-[var(--border-subtle)] flex items-center justify-center text-xl">
+                {target.avatar || "💬"}
+              </div>
+              <p className="text-xs font-medium text-[var(--text-secondary)]">
+                {searchQuery ? `"${searchQuery}" ile eşleşen mesaj bulunamadı.` : `Henüz mesaj yok. ${target.name} ekibine bir görev verin.`}
+              </p>
+            </div>
+          ) : (
+            filteredMessages.map((msg) => (
+              <MessageItem
+                key={msg.id}
+                message={msg}
+                onRollback={onRollback}
+                onQuoteReply={(m) => setQuotedMessage(m)}
+                searchHighlight={searchQuery}
+              />
+            ))
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+      )}
 
       {/* 3. ALINTI / THREAD BANNER */}
       {quotedMessage && (

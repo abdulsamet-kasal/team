@@ -20,6 +20,7 @@ export default function App() {
   const [activeTasks, setActiveTasks] = useState({});
   const [lastActivity, setLastActivity] = useState(null);
   const [terminalLogs, setTerminalLogs] = useState([]);
+  const [kanbanTasks, setKanbanTasks] = useState([]);
 
   // Sessions & Compact Memory
   const [sessions, setSessions] = useState([]);
@@ -104,16 +105,20 @@ export default function App() {
 
   const fetchInitialData = async () => {
     try {
-      const [botsRes, roomsRes, settingsRes, activeTasksRes, activityRes] = await Promise.all([
+      const [botsRes, roomsRes, settingsRes, activeTasksRes, activityRes, kanbanRes] = await Promise.all([
         fetch("/api/bots").then((r) => r.json()),
         fetch("/api/rooms").then((r) => r.json()),
         fetch("/api/settings").then((r) => r.json()),
         fetch("/api/tasks/active").then((r) => r.json()).catch(() => ({})),
-        fetch("/api/tasks/activity").then((r) => r.json()).catch(() => null)
+        fetch("/api/tasks/activity").then((r) => r.json()).catch(() => null),
+        fetch("/api/kanban").then((r) => r.json()).catch(() => [])
       ]);
       setBots(botsRes);
       setRooms(roomsRes);
       setSettings(settingsRes);
+      if (kanbanRes) {
+        setKanbanTasks(Array.isArray(kanbanRes) ? kanbanRes : []);
+      }
       if (activeTasksRes) {
         setActiveTasks(activeTasksRes);
         if (activeTasksRes[activeId]) {
@@ -271,6 +276,12 @@ export default function App() {
         if (!data.message.isLive) {
           setIsProcessing(false);
           setActiveToolEvent(null);
+        }
+        break;
+
+      case "kanban_updated":
+        if (data.tasks) {
+          setKanbanTasks(Array.isArray(data.tasks) ? data.tasks : []);
         }
         break;
 
@@ -697,6 +708,12 @@ export default function App() {
         onModelSelect={handleSelectModel}
         onProviderSwitch={handleSwitchProvider}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        kanbanTasks={kanbanTasks}
+        onOpenKanban={() => {
+          setRightPanelTab("kanban");
+          setIsRightPanelOpen(true);
+        }}
+        onSelectTarget={(id) => setActiveId(id)}
       />
 
       {/* 3. Sağ Panel (Kanban / Dosyalar / Hafıza / Maliyet) */}
