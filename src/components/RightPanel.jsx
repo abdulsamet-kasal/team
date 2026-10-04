@@ -4,17 +4,19 @@ import {
   Kanban as KanbanIcon,
   Files,
   Brain,
-  Coins
+  Coins,
+  Globe
 } from "lucide-react";
 import KanbanBoard from "./KanbanBoard";
 import FileTreeViewer from "./FileTreeViewer";
 import MemoryInspector from "./MemoryInspector";
 import TokenCostPanel from "./TokenCostPanel";
+import LivePreview from "./LivePreview";
 
 export default function RightPanel({
   isOpen,
   onClose,
-  activeTab = "kanban", // 'kanban' | 'files' | 'memory' | 'cost'
+  activeTab = "kanban", // 'kanban' | 'files' | 'memory' | 'cost' | 'preview'
   onTabChange,
   bots = [],
   activeSession,
@@ -34,10 +36,13 @@ export default function RightPanel({
 
   const tabs = [
     { id: "kanban", label: "Görevler", icon: KanbanIcon },
+    { id: "preview", label: "Önizleme", icon: Globe },
     { id: "files", label: "Dosyalar", icon: Files },
     { id: "memory", label: "Hafıza", icon: Brain },
     { id: "cost", label: "Maliyet", icon: Coins }
   ];
+
+  const isWide = activeTab === "preview" || activeTab === "kanban";
 
   return (
     <>
@@ -48,7 +53,11 @@ export default function RightPanel({
       />
 
       <aside
-        className="fixed inset-y-0 right-0 z-50 w-full sm:w-[420px] md:w-[450px] lg:w-[480px] bg-[var(--bg-surface)] border-l border-[var(--border-default)] shadow-2xl flex flex-col backdrop-blur-xl animate-in slide-in-from-right duration-200 select-none"
+        className={`fixed inset-y-0 right-0 z-50 w-full transition-all duration-200 bg-[var(--bg-surface)] border-l border-[var(--border-default)] shadow-2xl flex flex-col backdrop-blur-xl animate-in slide-in-from-right duration-200 select-none ${
+          activeTab === "preview"
+            ? "sm:w-[580px] md:w-[720px] lg:w-[860px]"
+            : "sm:w-[420px] md:w-[450px] lg:w-[480px]"
+        }`}
       >
         {/* Panel Top Bar: Tab Switcher & Close */}
         <div className="h-12 px-3 border-b border-[var(--border-subtle)] flex items-center justify-between bg-[var(--bg-surface-elevated)] shrink-0 gap-2">
@@ -88,6 +97,7 @@ export default function RightPanel({
         {/* Tab View Container */}
         <div className="flex-1 overflow-hidden">
           {activeTab === "kanban" && <KanbanBoard bots={bots} />}
+          {activeTab === "preview" && <LivePreview />}
           {activeTab === "files" && <FileTreeViewer />}
           {activeTab === "memory" && (
             <MemoryInspector

@@ -17,7 +17,9 @@ import {
   BashToolCard,
   FileToolCard,
   DelegationToolCard,
-  SpecialResultCard
+  SpecialResultCard,
+  KanbanToolCard,
+  GraphToolCard
 } from "./ToolCards";
 
 export default function MessageItem({
@@ -28,6 +30,7 @@ export default function MessageItem({
 }) {
   const [copied, setCopied] = useState(false);
   const [isRollingBack, setIsRollingBack] = useState(false);
+  const [showAllTools, setShowAllTools] = useState(false);
   const isUser = message.role === "user";
 
   const copyToClipboard = (text) => {
@@ -184,10 +187,39 @@ export default function MessageItem({
         {/* Tool Execution Cards */}
         {!isUser && message.toolEvents && message.toolEvents.length > 0 && (
           <div className="space-y-2 mb-3">
-            {message.toolEvents.map((event, idx) => {
+            {/* Çok sayıda araç adımı varsa eski adımları katla */}
+            {message.toolEvents.length > 2 && (
+              <button
+                type="button"
+                onClick={() => setShowAllTools(!showAllTools)}
+                className="w-full py-1.5 px-3 rounded-xl bg-[var(--bg-surface-elevated)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-subtle)] text-[11px] font-mono text-purple-300 flex items-center justify-between transition-colors cursor-pointer select-none"
+              >
+                <span className="flex items-center gap-1.5 truncate">
+                  <span>⚡</span>
+                  <span className="truncate">
+                    {showAllTools 
+                      ? `Tüm ${message.toolEvents.length} araç çağrısı açık` 
+                      : `${message.toolEvents.length - 2} önceki işlem adımı tamamlandı`}
+                  </span>
+                </span>
+                <span className="text-[10px] text-[var(--text-tertiary)] underline shrink-0 ml-2">
+                  {showAllTools ? "Gizle ▲" : "Tümünü Göster ▼"}
+                </span>
+              </button>
+            )}
+
+            {(showAllTools ? message.toolEvents : message.toolEvents.slice(-2)).map((event, idx) => {
               // Special result card check
               if (event.toolName === "create_github_repo") {
                 return <SpecialResultCard key={idx} event={event} />;
+              }
+              // Kanban Card
+              if (event.toolName === "create_kanban_task" || event.toolName === "update_kanban_task") {
+                return <KanbanToolCard key={idx} event={event} />;
+              }
+              // Graphify Card
+              if (event.toolName === "query_codebase_graph") {
+                return <GraphToolCard key={idx} event={event} />;
               }
               // Bash Card
               if (event.toolName === "execute_bash") {
@@ -199,8 +231,8 @@ export default function MessageItem({
                   />
                 );
               }
-              // File write/read Card
-              if (event.toolName === "write_file" || event.toolName === "read_file") {
+              // File write/read/edit Card
+              if (event.toolName === "write_file" || event.toolName === "read_file" || event.toolName === "edit_file") {
                 return <FileToolCard key={idx} event={event} />;
               }
               // Delegation Card

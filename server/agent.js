@@ -3,7 +3,7 @@ import { toolDefinitions, executeToolCall } from "./tools.js";
 import { memoryManager } from "./memory.js";
 import { isDangerousCommand } from "./executor.js";
 
-// Token Tasarrufu & Sıkıştırma: Geçmişteki eski araç sonuçlarını damıt
+// Token Tasarrufu & Sıkıştırma: Geçmişteki eski araç sonuçlarını ve büyük argümanları damıt
 function compactToolHistory(messages) {
   const toolIndices = [];
   messages.forEach((m, idx) => {
@@ -14,6 +14,7 @@ function compactToolHistory(messages) {
   const keepIndices = new Set(toolIndices.slice(-2));
 
   return messages.map((m, idx) => {
+    // 1. Eski tool çıktılarını damıt
     if (m.role === "tool" && !keepIndices.has(idx)) {
       const origContent = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
       if (origContent.length <= 250) return m;
@@ -24,6 +25,35 @@ function compactToolHistory(messages) {
         content: `[✓ Araç Çıktısı: "${firstLine}..." (${origContent.length.toLocaleString()} karakterlik çıktı önceki adımda işlendi)]`
       };
     }
+
+    // 2. Eski assistant tool_calls argümanlarını damıt (özellikle devasa write_file içerikleri)
+    if (m.role === "assistant" && m.tool_calls && Array.isArray(m.tool_calls) && idx < messages.length - 4) {
+      const compactedCalls = m.tool_calls.map(tc => {
+        if (tc.function && tc.function.name === "write_file") {
+          try {
+            const parsed = JSON.parse(tc.function.arguments || "{}");
+            if (parsed.content && parsed.content.length > 300) {
+              return {
+                ...tc,
+                function: {
+                  ...tc.function,
+                  arguments: JSON.stringify({
+                    filePath: parsed.filePath,
+                    content: `[... ${parsed.content.length.toLocaleString()} karakterlik dosya içeriği önceki adımda yazıldı ...]`
+                  })
+                }
+              };
+            }
+          } catch (e) {}
+        }
+        return tc;
+      });
+      return {
+        ...m,
+        tool_calls: compactedCalls
+      };
+    }
+
     return m;
   });
 }
@@ -70,10 +100,20 @@ export async function runAgentTurn(botId, history = [], { targetId, onChunk, onT
     }
   } catch (e) {}
 
-  // Sistem promptu hazırla (7 sabit kural, proje hafızası ve compact özet dahil)
+  // Aktif kuralları (Rules Engine) sistem promptuna ekle
+  let rulesPrompt = "";
+  try {
+    const activeRules = store.getRules().filter(r => r.enabled !== false);
+    if (activeRules.length > 0) {
+      rulesPrompt = `\n\n🛡️ AKTİF PROJE VE SİSTEM KURALLARI (ZORUNLU):\n` +
+        activeRules.map((r, i) => `${i + 1}. [${r.title}]: ${r.content}`).join("\n");
+    }
+  } catch (e) {}
+
+  // Sistem promptu hazırla (7 sabit kural, kurallar motoru, proje hafızası ve compact özet dahil)
   const systemMessage = {
     role: "system",
-    content: `${bot.soul}\n\n${memoryManager.getMemoryPrompt()}${sessionSummaryContext}\n\nÇalışma Dizini: ${cwd || settings.defaultCwd}\nSistem: Linux (CachyOS)\nKullanıcı: Samet Kasal (GitHub: abdulsamet-kasal)`
+    content: `${bot.soul}\n\n${memoryManager.getMemoryPrompt()}${rulesPrompt}${sessionSummaryContext}\n\nÇalışma Dizini: ${cwd || settings.defaultCwd}\nSistem: Linux (CachyOS)\nKullanıcı: Samet Kasal (GitHub: abdulsamet-kasal)`
   };
 
   // Multimodal (Görsel) desteği ve Akıllı Rol Eşleme:
@@ -124,20 +164,21 @@ export async function runAgentTurn(botId, history = [], { targetId, onChunk, onT
   // Token Tasarrufu: Eski araç çıktılarını damıt
   formattedHistory = compactToolHistory(formattedHistory);
 
-  // Token Güvenlik Duvarı: Toplam karakter bütçesi kontrolü (Max 350.000 karakter ~ 90.000 token)
-  // Gemini'nin 1.048.576 token limitine veya 9Router 503 hatasına düşmeyi kesinlikle engeller.
+  // Token Güvenlik Duvarı & Akıllı Sliding Window:
+  // Karakter sınırını 100.000 (~25.000 token) seviyesinde tutarak 3M token yakılmasını ve API tıkanmasını kesinlikle önler.
   let totalChars = formattedHistory.reduce((sum, m) => sum + (typeof m.content === "string" ? m.content.length : 1000), 0);
-  if (totalChars > 350000 && formattedHistory.length > 4) {
+  if ((totalChars > 100000 || formattedHistory.length > 12) && formattedHistory.length > 4) {
     const firstMsg = formattedHistory[0]; // Ana kullanıcı isteği / hedef
-    const recentMsgs = formattedHistory.slice(-8); // En son 8 adım
+    const recentMsgs = formattedHistory.slice(-6); // En son 6 adım
     formattedHistory = [
       firstMsg,
       {
         role: "user",
-        content: `[⚠️ Sistem Notu: Konuşma ve araç geçmişi token sınırına yaklaştığı için önceki ${formattedHistory.length - 9} adım otomatik olarak özetlendi. Yukarıdaki ana hedefe odaklanarak çalışmaya devam et.]`
+        content: `[📌 Sistem Ara Özeti: Önceki ${formattedHistory.length - 7} işlem adımı başarıyla icra edildi ve hafızaya işlendi. Yukarıdaki ana hedefe odaklanarak sıradaki işlemi yap.]`
       },
       ...recentMsgs
     ];
+    totalChars = formattedHistory.reduce((sum, m) => sum + (typeof m.content === "string" ? m.content.length : 1000), 0);
   }
 
   // Gemini Kuralı Garantisi: Gemini istekleri ASLA normal bir model/assistant cevabıyla bitemez!
@@ -176,19 +217,77 @@ export async function runAgentTurn(botId, history = [], { targetId, onChunk, onT
       reqHeaders["Authorization"] = `Bearer ${apiKey}`;
     }
 
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: reqHeaders,
-      body: JSON.stringify(requestBody),
-      signal: abortSignal
-    });
+    let data = null;
+    let retries = 0;
+    const maxRetries = 3;
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Model API Hatası (${response.status}): ${errText}`);
+    while (retries <= maxRetries) {
+      if (abortSignal && abortSignal.aborted) {
+        return { reply: "🛑 İşlem acilen durduruldu.", aborted: true, isGoalCompleted: false };
+      }
+
+      try {
+        const response = await fetch(`${baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: reqHeaders,
+          body: JSON.stringify(requestBody),
+          signal: abortSignal
+        });
+
+        if (response.ok) {
+          data = await response.json();
+          break;
+        }
+
+        const errText = await response.text();
+        const isRateLimit = response.status === 429 || errText.includes("rate limit") || errText.includes("RESOURCE_EXHAUSTED");
+        const isServerBusy = [500, 502, 503, 504].includes(response.status) || errText.includes("overloaded");
+        const isContextExceeded = errText.includes("context_length") || errText.includes("token count") || errText.includes("maximum context");
+
+        // Token / Context sınırı aşıldıysa acil daraltma yapıp yeniden dene
+        if (isContextExceeded && formattedHistory.length > 3) {
+          console.warn(`[Agent Context Exceeded]: Token sınırı aşıldı, acil daraltma ile yeniden deneniyor...`);
+          const firstMsg = formattedHistory[0];
+          const lastThree = formattedHistory.slice(-3);
+          formattedHistory = [
+            firstMsg,
+            { role: "user", content: "[⚠️ Sistem Uyarısı: Bağlam boyutu aşıldığı için önceki adımlar temizlendi. Doğrudan hedefe odaklan.]" },
+            ...lastThree
+          ];
+          requestBody.messages = [systemMessage, ...formattedHistory];
+          retries++;
+          continue;
+        }
+
+        // Hız sınırı veya sunucu yoğunluğunda bekle ve tekrar dene
+        if ((isRateLimit || isServerBusy) && retries < maxRetries) {
+          retries++;
+          const waitMs = Math.pow(2, retries) * 1000;
+          console.warn(`[Agent Retry ${retries}/${maxRetries}]: HTTP ${response.status} hatası. ${waitMs}ms sonra yeniden deneniyor...`);
+          await new Promise(r => setTimeout(r, waitMs));
+          continue;
+        }
+
+        throw new Error(`Model API Hatası (${response.status}): ${errText}`);
+      } catch (fetchErr) {
+        if (abortSignal && abortSignal.aborted) {
+          return { reply: "🛑 İşlem acilen durduruldu.", aborted: true, isGoalCompleted: false };
+        }
+        if (retries < maxRetries && !fetchErr.message?.startsWith("Model API Hatası")) {
+          retries++;
+          const waitMs = Math.pow(2, retries) * 1000;
+          console.warn(`[Agent Ağ Yeniden Deneme ${retries}/${maxRetries}]: ${fetchErr.message}. ${waitMs}ms sonra yeniden deneniyor...`);
+          await new Promise(r => setTimeout(r, waitMs));
+          continue;
+        }
+        throw fetchErr;
+      }
     }
 
-    const data = await response.json();
+    if (!data) {
+      throw new Error("Modelden geçerli bir yanıt alınamadı.");
+    }
+
     if (data.usage) {
       store.recordTokenUsage(bot.id, data.usage.prompt_tokens || 0, data.usage.completion_tokens || 0);
     } else {

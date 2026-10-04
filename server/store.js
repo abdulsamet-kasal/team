@@ -1,16 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import { defaultBots, defaultRooms, defaultSettings, providerPresets } from "./defaultData.js";
+import { EventEmitter } from "node:events";
+import { defaultBots, defaultRooms, defaultSettings, defaultRules, providerPresets } from "./defaultData.js";
 
 const DATA_DIR = path.resolve("./data");
 const STATE_FILE = path.join(DATA_DIR, "team_state.json");
 
-class Store {
+class Store extends EventEmitter {
   constructor() {
+    super();
     this.state = {
       settings: { ...defaultSettings },
       bots: [...defaultBots],
       rooms: [...defaultRooms],
+      rules: [...defaultRules],
       messages: {}, // targetId -> Array of messages (backward-compat)
       sessions: {}, // targetId -> Array of session objects
       activeSessions: {}, // targetId -> active sessionId
@@ -46,10 +49,19 @@ class Store {
           sessions: loaded.sessions || {},
           activeSessions: loaded.activeSessions || {},
           kanban: Array.isArray(loaded.kanban) ? loaded.kanban : [],
+          rules: Array.isArray(loaded.rules) && loaded.rules.length ? loaded.rules : [...defaultRules],
           tokenStats: loaded.tokenStats || {},
           approvalMode: loaded.approvalMode || "dangerous",
           checkpoints: Array.isArray(loaded.checkpoints) ? loaded.checkpoints : []
         };
+
+        // Kural Senkronizasyonu
+        const existingRuleIds = new Set(this.state.rules.map(r => r.id));
+        for (const defRule of defaultRules) {
+          if (!existingRuleIds.has(defRule.id)) {
+            this.state.rules.push(defRule);
+          }
+        }
 
         // Sağlayıcı (Provider) Başlatma ve 9Router Uyumluluğu
         if (!this.state.settings.provider) {
@@ -508,15 +520,22 @@ class Store {
     if (!this.state.kanban) this.state.kanban = [];
     this.state.kanban.unshift(newTask);
     this.save();
+    this.emit("kanban_updated", this.getKanbanTasks());
     return newTask;
   }
 
-  updateKanbanTask(id, patch) {
-    if (!this.state.kanban) return null;
-    const idx = this.state.kanban.findIndex(t => t.id === id);
+  updateKanbanTask(idOrQuery, patch) {
+    if (!this.state.kanban || !idOrQuery) return null;
+    let idx = this.state.kanban.findIndex(t => t.id === idOrQuery);
+    if (idx === -1) {
+      // Akıllı arama: ID bulunamadıysa başlık içinde ara
+      const q = String(idOrQuery).toLowerCase();
+      idx = this.state.kanban.findIndex(t => t.title && t.title.toLowerCase().includes(q));
+    }
     if (idx >= 0) {
       this.state.kanban[idx] = { ...this.state.kanban[idx], ...patch, updatedAt: new Date().toISOString() };
       this.save();
+      this.emit("kanban_updated", this.getKanbanTasks());
       return this.state.kanban[idx];
     }
     return null;
@@ -526,6 +545,7 @@ class Store {
     if (!this.state.kanban) return false;
     this.state.kanban = this.state.kanban.filter(t => t.id !== id);
     this.save();
+    this.emit("kanban_updated", this.getKanbanTasks());
     return true;
   }
 
@@ -583,6 +603,53 @@ class Store {
 
   getTokenStats() {
     return this.state.tokenStats || {};
+  }
+
+  // Rules Engine
+  getRules() {
+    return this.state.rules || [];
+  }
+
+  addRule(rule) {
+    if (!this.state.rules) this.state.rules = [];
+    const newRule = {
+      id: "rule-" + Date.now(),
+      title: rule.title || "Yeni Kural",
+      content: rule.content || "",
+      category: rule.category || "general",
+      enabled: rule.enabled !== false,
+      createdAt: new Date().toISOString()
+    };
+    this.state.rules.push(newRule);
+    this.save();
+    this.emit("rules_updated", this.state.rules);
+    return newRule;
+  }
+
+  updateRule(id, updates) {
+    if (!this.state.rules) this.state.rules = [];
+    const idx = this.state.rules.findIndex(r => r.id === id);
+    if (idx < 0) return null;
+    this.state.rules[idx] = {
+      ...this.state.rules[idx],
+      ...updates,
+      updatedAt: new Date().toISOString()
+    };
+    this.save();
+    this.emit("rules_updated", this.state.rules);
+    return this.state.rules[idx];
+  }
+
+  deleteRule(id) {
+    if (!this.state.rules) return false;
+    const initialLen = this.state.rules.length;
+    this.state.rules = this.state.rules.filter(r => r.id !== id);
+    if (this.state.rules.length !== initialLen) {
+      this.save();
+      this.emit("rules_updated", this.state.rules);
+      return true;
+    }
+    return false;
   }
 }
 
