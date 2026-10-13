@@ -7,7 +7,7 @@ const PRESET_PROVIDERS = [
     id: "9router",
     name: "9Router (Yerel)",
     apiBaseUrl: "http://localhost:20128/v1",
-    apiKey: "***REMOVED***",
+    apiKey: "", // .env (NINE_ROUTER_API_KEY) dosyasından yüklenir, koda gömülmez
     defaultModel: "ag/gemini-3.8-flash",
     icon: "⚡",
     description: "Yerel yüksek hızlı model yönlendirici (Gemini, Claude, Kimi, Minimax, DeepSeek)"
@@ -98,7 +98,15 @@ export default function SettingsModal({ isOpen, onClose, settings = {}, onSave }
     try {
       const url = baseUrl || formData.apiBaseUrl || "http://localhost:20128/v1";
       const key = apiKey !== undefined ? apiKey : (formData.apiKey || "");
-      const res = await fetch(`/api/models?baseUrl=${encodeURIComponent(url)}&apiKey=${encodeURIComponent(key)}`);
+      // Güvenlik: anahtar query-string'e konmaz (sunucu/proxy log'larına düşer).
+      // POST body + header taşınır; "***" maskeliyse sunucudaki kayıtlı anahtar kullanılır.
+      const headers = { "Content-Type": "application/json" };
+      if (key && key !== "***") headers["x-provider-key"] = key;
+      const res = await fetch(`/api/models`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ baseUrl: url, ...(key && key !== "***" ? { apiKey: key } : {}) }),
+      });
       if (res.ok) {
         const data = await res.json();
         if (data.models && data.models.length > 0) {
@@ -130,7 +138,13 @@ export default function SettingsModal({ isOpen, onClose, settings = {}, onSave }
     try {
       const url = formData.apiBaseUrl || "http://localhost:20128/v1";
       const key = formData.apiKey || "";
-      const res = await fetch(`/api/models?baseUrl=${encodeURIComponent(url)}&apiKey=${encodeURIComponent(key)}`);
+      const headers = { "Content-Type": "application/json" };
+      if (key && key !== "***") headers["x-provider-key"] = key;
+      const res = await fetch(`/api/models`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ baseUrl: url, ...(key && key !== "***" ? { apiKey: key } : {}) }),
+      });
       if (res.ok) {
         const data = await res.json();
         if (data.online) {

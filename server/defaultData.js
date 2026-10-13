@@ -3,7 +3,7 @@ export const providerPresets = [
     id: "9router",
     name: "9Router (Yerel)",
     apiBaseUrl: "http://localhost:20128/v1",
-    apiKey: "***REMOVED***",
+    apiKey: "", // 9Router anahtarı .env (NINE_ROUTER_API_KEY) dosyasından yüklenir, koda gömülmez
     defaultModel: "ag/gemini-3.8-flash",
     icon: "⚡",
     description: "Yerel yüksek hızlı model yönlendirici (Gemini, Claude, Kimi, Minimax, DeepSeek)"
@@ -76,16 +76,16 @@ export const providerPresets = [
 export const defaultSettings = {
   provider: "9router",
   apiBaseUrl: "http://localhost:20128/v1",
-  apiKey: "***REMOVED***",
+  apiKey: "", // NINE_ROUTER_API_KEY (.env) dosyasından yüklenir, koda gömülmez
   defaultModel: "ag/gemini-3.8-flash",
-  defaultCwd: "***REMOVED***",
+  defaultCwd: "", // boşsa process.cwd() kullanılır (makineye özel yol commitlenmez)
   autoApproveCommands: true,
   savedProviders: {
     "9router": {
       id: "9router",
       name: "9Router (Yerel)",
       apiBaseUrl: "http://localhost:20128/v1",
-      apiKey: "***REMOVED***",
+      apiKey: "", // 9Router anahtarı .env (NINE_ROUTER_API_KEY) dosyasından yüklenir, koda gömülmez
       defaultModel: "ag/gemini-3.8-flash"
     }
   }

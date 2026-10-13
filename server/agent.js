@@ -79,9 +79,9 @@ export async function runAgentTurn(botId, history = [], { targetId, onChunk, onT
     throw new Error(`Bot bulunamadı: ${botId}`);
   }
 
-  const settings = store.getSettings();
+  const settings = store.getSettingsRaw();
   const baseUrl = settings.apiBaseUrl.replace(/\/+$/, "");
-  const apiKey = settings.apiKey;
+  const apiKey = settings.apiKey || process.env.NINE_ROUTER_API_KEY || "";
   const model = bot.model || settings.defaultModel || "combo";
 
   // Botun filtrelediği araçlar

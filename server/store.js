@@ -1,10 +1,21 @@
+import "dotenv/config";
 import fs from "node:fs";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import { defaultBots, defaultRooms, defaultSettings, defaultRules, providerPresets } from "./defaultData.js";
 
-const DATA_DIR = path.resolve("./data");
+const DATA_DIR = process.env.TEAM_DATA_DIR || path.resolve("./data");
 const STATE_FILE = path.join(DATA_DIR, "team_state.json");
+
+// Güvenlik: state dosyasına yazmadan önce API anahtarlarını maskele
+function sanitizeForLog(obj) {
+  try {
+    const s = JSON.stringify(obj);
+    return s.replace(/(sk-[A-Za-z0-9\-_]{8,})/g, "***MASKED***");
+  } catch (_) {
+    return "[unserializable]";
+  }
+}
 
 class Store extends EventEmitter {
   constructor() {
@@ -27,7 +38,7 @@ class Store extends EventEmitter {
       botName: "Yazılım Ekibi",
       botAvatar: "👥",
       currentStatus: "Ekip hazır ve komut almaya hazır.",
-      cwd: "***REMOVED***",
+      cwd: process.cwd(),
       updatedAt: new Date().toISOString()
     };
     this.init();
@@ -75,7 +86,7 @@ class Store extends EventEmitter {
             id: "9router",
             name: "9Router (Yerel)",
             apiBaseUrl: this.state.settings.apiBaseUrl || "http://localhost:20128/v1",
-            apiKey: this.state.settings.apiKey || "***REMOVED***",
+            apiKey: this.state.settings.apiKey || process.env.NINE_ROUTER_API_KEY || "",
             defaultModel: this.state.settings.defaultModel || "ag/gemini-3.8-flash"
           };
         }
@@ -125,6 +136,7 @@ class Store extends EventEmitter {
       } else {
         this.save();
       }
+      this.hydrateApiKeyFromEnv();
     } catch (err) {
       console.error("Store init error:", err);
     }
@@ -132,18 +144,55 @@ class Store extends EventEmitter {
 
   save() {
     try {
-      fs.writeFileSync(STATE_FILE, JSON.stringify(this.state, null, 2), "utf8");
+      // Güvenlik: API anahtarını diske yazma (sadece .env'den okunur).
+      // settings.apiKey ve savedProviders[*].apiKey state'te tutulur
+      // ama dosyaya maskeli yazılır; açılışta .env'den geri yüklenir.
+      const clone = JSON.parse(JSON.stringify(this.state));
+      if (clone.settings) {
+        if (clone.settings.apiKey) clone.settings.apiKey = "";
+        const sp = clone.settings.savedProviders || {};
+        for (const k of Object.keys(sp)) {
+          if (sp[k] && sp[k].apiKey) sp[k].apiKey = "";
+        }
+      }
+      fs.writeFileSync(STATE_FILE, JSON.stringify(clone, null, 2), "utf8");
     } catch (err) {
       console.error("Store save error:", err);
     }
   }
 
-  getSettings() {
+  // Açılışta .env'deki anahtarı memory'deki settings'e geri yükle
+  hydrateApiKeyFromEnv() {
+    const envKey = process.env.NINE_ROUTER_API_KEY || "";
+    if (envKey && !this.state.settings.apiKey) {
+      this.state.settings.apiKey = envKey;
+    }
+  }
+
+  getSettings({ maskSecrets = true } = {}) {
+    const s = { ...this.state.settings };
+    if (maskSecrets && s.apiKey) s.apiKey = "***";
+    if (maskSecrets && s.savedProviders) {
+      const sp = {};
+      for (const [k, v] of Object.entries(s.savedProviders)) {
+        sp[k] = { ...v };
+        if (sp[k].apiKey) sp[k].apiKey = "***";
+      }
+      s.savedProviders = sp;
+    }
+    return s;
+  }
+
+  /** Dahili kullanım: maskesiz ayarlar (sadece sunucu tarafı LLM çağrıları için) */
+  getSettingsRaw() {
     return this.state.settings;
   }
 
   updateSettings(patch) {
-    this.state.settings = { ...this.state.settings, ...patch };
+    // "***" maskeli değer gelirse gerçek anahtarı ezme
+    const clean = { ...patch };
+    if (clean.apiKey === "***") delete clean.apiKey;
+    this.state.settings = { ...this.state.settings, ...clean };
     const providerId = this.state.settings.provider || "9router";
     if (!this.state.settings.savedProviders) this.state.settings.savedProviders = {};
     this.state.settings.savedProviders[providerId] = {
@@ -157,17 +206,19 @@ class Store extends EventEmitter {
     return this.state.settings;
   }
 
-  getProviders() {
+  getProviders({ maskSecrets = true } = {}) {
     const saved = this.state.settings.savedProviders || {};
     const currentProvider = this.state.settings.provider || "9router";
 
     return providerPresets.map(preset => {
       const savedConfig = saved[preset.id] || {};
-      return {
+      const merged = {
         ...preset,
         ...savedConfig,
         isActive: preset.id === currentProvider
       };
+      if (maskSecrets && merged.apiKey) merged.apiKey = "***";
+      return merged;
     });
   }
 
@@ -202,17 +253,19 @@ class Store extends EventEmitter {
 
   saveProviderConfig(providerId, config) {
     const preset = providerPresets.find(p => p.id === providerId);
+    const clean = { ...(config || {}) };
+    if (clean.apiKey === "***") delete clean.apiKey;
     if (!this.state.settings.savedProviders) this.state.settings.savedProviders = {};
     this.state.settings.savedProviders[providerId] = {
       ...(this.state.settings.savedProviders[providerId] || {}),
       name: preset?.name || providerId,
-      ...config,
+      ...clean,
       id: providerId
     };
     if (this.state.settings.provider === providerId) {
-      if (config.apiBaseUrl) this.state.settings.apiBaseUrl = config.apiBaseUrl;
-      if (config.apiKey !== undefined) this.state.settings.apiKey = config.apiKey;
-      if (config.defaultModel) this.state.settings.defaultModel = config.defaultModel;
+      if (clean.apiBaseUrl) this.state.settings.apiBaseUrl = clean.apiBaseUrl;
+      if (clean.apiKey !== undefined) this.state.settings.apiKey = clean.apiKey;
+      if (clean.defaultModel) this.state.settings.defaultModel = clean.defaultModel;
     }
     this.save();
     return this.state.settings.savedProviders[providerId];

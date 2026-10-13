@@ -1,3 +1,4 @@
+import "dotenv/config";
 import http from "node:http";
 import path from "node:path";
 import fs from "node:fs";
@@ -16,7 +17,14 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const AUTH_TOKEN = process.env.TEAM_AUTH_TOKEN || null;
 
-app.use(cors());
+const allowedOrigins = (process.env.TEAM_ALLOWED_ORIGINS || "http://localhost:3000,http://127.0.0.1:3000").split(",").map(s => s.trim()).filter(Boolean);
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true); // curl / mobil / same-origin
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(new Error("CORS engellendi: " + origin));
+  },
+}));
 app.use(express.json({ limit: "50mb" }));
 
 // Güvenlik Duvarı: Opsiyonel TEAM_AUTH_TOKEN koruması
@@ -75,15 +83,16 @@ app.get("/api/settings", (req, res) => {
 
 app.post("/api/settings", (req, res) => {
   const updated = store.updateSettings(req.body);
-  broadcast({ type: "settings_updated", settings: updated });
-  res.json(updated);
+  const masked = store.getSettings();
+  broadcast({ type: "settings_updated", settings: masked });
+  res.json(masked);
 });
 
 // Providers API
 app.get("/api/providers", (req, res) => {
   res.json({
     providers: store.getProviders(),
-    activeProvider: store.getSettings().provider || "9router",
+    activeProvider: store.getSettingsRaw().provider || "9router",
     settings: store.getSettings()
   });
 });
@@ -91,12 +100,14 @@ app.get("/api/providers", (req, res) => {
 app.post("/api/providers/switch", (req, res) => {
   const { providerId, apiBaseUrl, apiKey, defaultModel } = req.body;
   if (!providerId) return res.status(400).json({ error: "providerId gereklidir." });
-  const result = store.switchProvider(providerId, { apiBaseUrl, apiKey, defaultModel });
-  broadcast({ type: "settings_updated", settings: result.settings });
-  broadcast({ type: "provider_switched", providerId, settings: result.settings });
+  if (apiKey === "***") return res.status(400).json({ error: "Maskeli anahtar gönderilemez; gerçek anahtarı yazın veya boş bırakın." });
+  store.switchProvider(providerId, { apiBaseUrl, apiKey, defaultModel });
+  const masked = store.getSettings();
+  broadcast({ type: "settings_updated", settings: masked });
+  broadcast({ type: "provider_switched", providerId, settings: masked });
   res.json({
     success: true,
-    ...result,
+    settings: masked,
     providers: store.getProviders()
   });
 });
@@ -104,21 +115,25 @@ app.post("/api/providers/switch", (req, res) => {
 app.post("/api/providers/save", (req, res) => {
   const { providerId, config } = req.body;
   if (!providerId) return res.status(400).json({ error: "providerId gereklidir." });
-  const saved = store.saveProviderConfig(providerId, config || {});
-  broadcast({ type: "settings_updated", settings: store.getSettings() });
+  if (config && config.apiKey === "***") return res.status(400).json({ error: "Maskeli anahtar gönderilemez." });
+  store.saveProviderConfig(providerId, config || {});
+  const masked = store.getSettings();
+  broadcast({ type: "settings_updated", settings: masked });
   res.json({
     success: true,
-    provider: saved,
     providers: store.getProviders(),
-    settings: store.getSettings()
+    settings: masked
   });
 });
 
 // Dynamic Models API (Live query to active LLM provider)
-app.get("/api/models", async (req, res) => {
-  const settings = store.getSettings();
-  const baseUrl = (req.query.baseUrl || settings.apiBaseUrl || "http://localhost:20128/v1").replace(/\/+$/, "");
-  const apiKey = req.query.apiKey !== undefined ? req.query.apiKey : settings.apiKey;
+// NOT: API anahtarı URL query ile taşınmaz (log'lara düşer).
+// İstemci POST + JSON body kullanır; GET yalnızca geriye uyumluluk için
+// header (x-provider-key) kabul eder.
+async function handleModelsRequest(req, res) {
+  const settings = store.getSettingsRaw();
+  const baseUrl = (req.query.baseUrl || req.body?.baseUrl || settings.apiBaseUrl || "http://localhost:20128/v1").replace(/\/+$/, "");
+  const apiKey = req.body?.apiKey ?? req.headers["x-provider-key"] ?? req.query.apiKey ?? settings.apiKey;
 
   try {
     const controller = new AbortController();
@@ -191,7 +206,10 @@ app.get("/api/models", async (req, res) => {
       provider: settings.provider
     });
   }
-});
+}
+
+app.get("/api/models", handleModelsRequest);
+app.post("/api/models", handleModelsRequest);
 
 // Quick Model Select API
 app.post("/api/models/select", (req, res) => {
